@@ -1,0 +1,14 @@
+[package]
+name = "glyph"
+version = "0.1.0"
+edition = "2021"
+description = "Template-matching OCR for the EVE Online overview font (DESIGN.md S2)"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "glyph"
+path = "src/bin/glyph.rs"
