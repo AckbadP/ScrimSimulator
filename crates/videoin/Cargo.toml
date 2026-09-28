@@ -1,0 +1,11 @@
+[package]
+name = "videoin"
+version = "0.1.0"
+edition = "2021"
+description = "ffmpeg-piped frame decode for scrim-recorder (DESIGN.md S8/S1)"
+
+[dependencies]
+image = { version = "0.25", default-features = false }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

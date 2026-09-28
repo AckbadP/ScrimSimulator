@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/glyph"]
+members = ["crates/glyph", "crates/videoin", "crates/overview"]
+
+# OCR (NCC template matching, `crates/glyph`) is pixel-loop-heavy; at opt-level 0 the video test
+# bed in `crates/overview` (every frame of a several-second clip) takes minutes instead of
+# seconds. This only affects test/bench binaries, not normal `cargo build`/`cargo run` compile
+# times.
+[profile.test]
+opt-level = 3

@@ -65,8 +65,15 @@ impl CoverageMap {
 /// compression/encoder noise (e.g. the blue overview background in the fixtures varies by a
 /// couple of levels per pixel).
 fn modal_bg(img: &RgbImage, x0: u32, y0: u32, w: u32, h: u32) -> [u8; 3] {
-    use std::collections::HashMap;
-    let mut counts: HashMap<[u8; 3], u32> = HashMap::new();
+    // `BTreeMap`, not `HashMap`: a region with a genuine count tie between two candidate
+    // background shades is common (large flat areas), and `HashMap`'s iteration order is
+    // randomised per process, so resolving ties by iteration order — as both the bucket-count
+    // `max_by_key` below and picking each bucket's representative colour do — would make the
+    // detected background (and everything downstream: coverage, segmentation, the read text
+    // itself) nondeterministic across runs of the very same binary on the very same image.
+    // `BTreeMap` iterates in a fixed key order, making both tie-breaks reproducible.
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<[u8; 3], u32> = BTreeMap::new();
     for y in y0..y0 + h {
         for x in x0..x0 + w {
             let Rgb(p) = *img.get_pixel(x, y);
@@ -74,8 +81,8 @@ fn modal_bg(img: &RgbImage, x0: u32, y0: u32, w: u32, h: u32) -> [u8; 3] {
         }
     }
     // Quantise to buckets of 4 to merge near-identical background shades before taking the mode.
-    let mut bucket_counts: HashMap<[u8; 3], u32> = HashMap::new();
-    let mut bucket_examples: HashMap<[u8; 3], [u8; 3]> = HashMap::new();
+    let mut bucket_counts: BTreeMap<[u8; 3], u32> = BTreeMap::new();
+    let mut bucket_examples: BTreeMap<[u8; 3], [u8; 3]> = BTreeMap::new();
     for (colour, n) in &counts {
         let bucket = [colour[0] / 4, colour[1] / 4, colour[2] / 4];
         *bucket_counts.entry(bucket).or_insert(0) += n;
