@@ -1,0 +1,432 @@
+# EVE ship type names, used to snap OCR'd overview Type-column readings to a known ship
+# (DESIGN.md S4.3's "fuzzy match against a candidate set" pass; see crates/overview/src/ship_types.rs).
+#
+# Source: https://wiki.eveuniversity.org/Alphabetical_Ship_List, fetched 2026-09-27 (424 names).
+# `Capsule` is added by hand: it is not a player-flyable ship you can buy, it is the pod every
+# pilot is left in after a ship loss, but it is exactly the string the overview prints for one, and
+# `crates/overview/src/track.rs` treats it as the one legal post-loss ship-type transition.
+Abaddon
+Absolution
+Adrestia
+Aeon
+Algos
+Aliastra Catalyst
+Alligator
+Amarr Shuttle
+Anathema
+Anshar
+Apocalypse
+Apocalypse Imperial Issue
+Apocalypse Navy Issue
+Apostle
+Apotheosis
+Arazu
+Arbitrator
+Archon
+Ares
+Ark
+Armageddon
+Armageddon Imperial Issue
+Armageddon Navy Issue
+Ashimmu
+Astarte
+Astero
+Atron
+Augoror
+Augoror Navy Issue
+Avalanche
+Avatar
+Azariel
+Badger
+Bane
+Bantam
+Barghest
+Basilisk
+Bellicose
+Bestla
+Bestower
+Bhaalgorn
+Bifrost
+Blackbird
+Boobook
+Bowhead
+Breacher
+Broadsword
+Brutix
+Brutix Navy Issue
+Burst
+Bustard
+Buzzard
+Caedes
+Caiman
+Caldari Navy Hookbill
+Caldari Shuttle
+Cambion
+Capsule
+Caracal
+Caracal Navy Issue
+Catalyst
+Catalyst Navy Issue
+Celestis
+Cenotaph
+Cerberus
+Chameleon
+Charon
+Cheetah
+Chemosh
+Chimera
+Chremoas
+Civilian Amarr Shuttle
+Civilian Caldari Shuttle
+Civilian Gallente Shuttle
+Civilian Minmatar Shuttle
+Claw
+Claymore
+Cobra
+Coercer
+Coercer Navy Issue
+Condor
+Confessor
+Corax
+Cormorant
+Cormorant Navy Issue
+Council Diplomatic Shuttle
+Covetor
+Crane
+Crow
+Crucifier
+Crucifier Navy Issue
+Cruor
+Crusader
+Curse
+Cybele
+Cyclone
+Cyclone Fleet Issue
+Cynabal
+Dagon
+Damavik
+Damnation
+Daredevil
+Deacon
+Deimos
+Deluge
+Devoter
+Dominix
+Dominix Navy Issue
+Dragoon
+Drake
+Drake Navy Issue
+Dramiel
+Draugur
+Drekavac
+Eagle
+Echelon
+Echo
+Eidolon
+Endurance
+Enforcer
+Enyo
+Eos
+Epithal
+Erebus
+Eris
+Etana
+Executioner
+Exequror
+Exequror Navy Issue
+Falcon
+Federation Navy Comet
+Fenrir
+Ferox
+Ferox Navy Issue
+Fiend
+Flycatcher
+Freki
+Gallente Shuttle
+Garmur
+Geri
+Gila
+Gnosis
+Gold Magnate
+Golem
+Goru's Shuttle
+Griffin
+Griffin Navy Issue
+Guardian
+Guardian-Vexor
+Guristas Shuttle
+Harbinger
+Harbinger Navy Issue
+Harpy
+Hawk
+Hecate
+Hel
+Helios
+Hematos
+Heretic
+Heron
+Heron Navy Issue
+Hoarder
+Hound
+Hubris
+Huginn
+Hulk
+Hurricane
+Hurricane Fleet Issue
+Hydra
+Hyena
+Hyperion
+Ibis
+Ikitursa
+Imicus
+Imicus Navy Issue
+Immolator
+Imp
+Impairor
+Impel
+Imperial Navy Slicer
+Incursus
+Inner Zone Shipping Catalyst
+Inner Zone Shipping Imicus
+Inquisitor
+Intaki Syndicate Catalyst
+InterBus Catalyst
+InterBus Shuttle
+Ishkur
+Ishtar
+Iteron Mark V
+Ixion
+Jackdaw
+Jaguar
+Karura
+Keres
+Kestrel
+Khizriel
+Kikimora
+Kirin
+Kitsune
+Komodo
+Kronos
+Kryos
+Lachesis
+Laelaps
+Legion
+Leopard
+Leshak
+Leviathan
+Lif
+Loggerhead
+Loki
+Machariel
+Mackinaw
+Maelstrom
+Magnate
+Magnate Navy Issue
+Magus
+Malediction
+Malice
+Maller
+Mamba
+Mammoth
+Manticore
+Marshal
+Mastodon
+Maulus
+Maulus Navy Issue
+Medusa
+Megathron
+Megathron Federate Issue
+Megathron Navy Issue
+Mekubal
+Merlin
+Metamorphosis
+Miasmos
+Miasmos Amastris Edition
+Miasmos Quafe Ultra Edition
+Miasmos Quafe Ultramarine Edition
+Mimir
+Minmatar Shuttle
+Minokawa
+Moa
+Molok
+Monitor
+Moracha
+Moros
+Moros Navy Issue
+Muninn
+Myrmidon
+Myrmidon Navy Issue
+Naga
+Naglfar
+Naglfar Fleet Issue
+Navitas
+Nefantar Thrasher
+Nemesis
+Nereus
+Nergal
+Nestor
+Nidhoggur
+Nighthawk
+Nightmare
+Ninazu
+Noctis
+Nomad
+Nyx
+Obelisk
+Occator
+Omen
+Omen Navy Issue
+Oneiros
+Onyx
+Opux Luxury Yacht
+Oracle
+Orca
+Orthrus
+Osprey
+Osprey Navy Issue
+Pacifier
+Paladin
+Panther
+Phantasm
+Phantom
+Phobos
+Phoenix
+Phoenix Navy Issue
+Pilgrim
+Pontifex
+Porpoise
+Praxis
+Primae
+Probe
+Probe Fleet Issue
+Procurer
+Prophecy
+Prophecy Navy Issue
+Prorator
+Prospect
+Proteus
+Providence
+Prowler
+Punisher
+Purifier
+Python
+Quafe Catalyst
+Rabisu
+Ragnarok
+Raiju
+Rapier
+Raptor
+Rattlesnake
+Rattlesnake Victory Edition
+Raven
+Raven Navy Issue
+Raven State Issue
+Reaper
+Redeemer
+Republic Fleet Firetail
+Retribution
+Retriever
+Revelation
+Revelation Navy Issue
+Revenant
+Rhea
+Rifter
+Rodiva
+Rokh
+Rook
+Rorqual
+Rupture
+Sabre
+Sacrilege
+Sarum Magnate
+Scalpel
+Scimitar
+Scorpion
+Scorpion Ishukone Watch
+Scorpion Navy Issue
+Scythe
+Scythe Fleet Issue
+Sentinel
+Shapash
+Sidewinder
+Sigil
+Silver Magnate
+Sin
+Skiff
+Skybreaker
+Slasher
+Sleipnir
+Specter
+Squall
+Stabber
+Stabber Fleet Issue
+Stiletto
+Stork
+Stormbringer
+Stratios
+Stratios Emergency Responder
+Succubus
+Sukuuvestaa Heron
+Sunesis
+Svipul
+Taipan
+Talos
+Talwar
+Taranis
+Tash-Murkon Magnate
+Tayra
+Tempest
+Tempest Fleet Issue
+Tempest Tribal Issue
+Tengu
+Thalia
+Thanatos
+Tholos
+Thorax
+Thrasher
+Thrasher Fleet Issue
+Thunderchild
+Tiamat
+Tormentor
+Tornado
+Torrent
+Tristan
+Typhoon
+Typhoon Fleet Issue
+Utu
+Vagabond
+Valravn
+Vangel
+Vanquisher
+Vargur
+Vedmak
+Vehement
+Velator
+Vendetta
+Vengeance
+Venture
+Vexor
+Vexor Navy Issue
+Vherokior Probe
+Viator
+Victor
+Victorieux Luxury Yacht
+Vigil
+Vigil Fleet Issue
+Vigilant
+Vindicator
+Violator
+Virtuoso
+Visitant
+Vulture
+Whiptail
+Widow
+Wolf
+Worm
+Wraith
+Wreathe
+Wyvern
+Zarmazd
+Zealot
+Zephyr
+Zirnitra

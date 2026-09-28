@@ -58,7 +58,7 @@ const EXPECTED_PILOTS: &[(&str, &str)] = &[
     ("Illypa Kapmen", "Astero"),
     ("Janis Drukhari", "Wor"), // real type is "Worm" — see the trailing-`rm` note further down
     ("jannaukko", "Mastodon"),
-    ("Jax Sunder", "Griffin Navy Is"),
+    ("Jax Sunder", "Griffin Navy Issue"),
     ("Jilbert Tibotea", "Badger"),
     ("Kenneth McArt", "Tornado"),
     ("Laxus Erata", "Bustard"),
@@ -131,12 +131,16 @@ fn tracks_every_pilot_with_a_stable_type_and_no_conflicts() {
     // never stops flagging conflicts against whichever truncation (`"Wor"`, `"Wo."`, ...) the
     // 3-sample bootstrap happened to lock — the same font/scale weakness as `crates/glyph`'s
     // `"200 km"` -> `"200 k"` case (see `matcher::classify_span`'s `CONFIDENT_SINGLE_SCORE` doc
-    // comment), landing on a word this video happens to use as a ship name. The safety property
-    // that matters — the *displayed* type never silently swaps to a different real ship — still
-    // holds (every conflict here is a truncation of the same word, not a different one); what
-    // doesn't hold is this prototype ever cleanly confirming "Worm" after bootstrap, which is a
-    // `glyph`-level accuracy gap, not a tracking-logic bug, so it's excluded from the check below
-    // rather than the check weakened for everyone.
+    // comment), landing on a word this video happens to use as a ship name.
+    // `ship_types::ShipTypes` (this crate's DESIGN.md S4.3 candidate-set fuzzy match) does resolve
+    // the *column-truncation* case in general (see `Jax Sunder`/`Griffin Navy Issue` above), but
+    // deliberately declines anything shorter than 4 characters (`ShipTypes::MIN_LEN_FOR_FUZZY`) as
+    // too little signal to fuzzy-match safely, and `"Wor"`/`"Wo."` are exactly that short. The
+    // safety property that matters — the *displayed* type never silently swaps to a different real
+    // ship — still holds (every conflict here is a truncation of the same word, not a different
+    // one); what doesn't hold is this prototype ever cleanly confirming "Worm" after bootstrap,
+    // which is a `glyph`-level accuracy gap, not a tracking-logic bug, so it's excluded from the
+    // check below rather than the check weakened for everyone.
     let has_clean_type_reads = |t: &&overview::track::Track| levenshtein(&t.name, "Janis Drukhari") > 2;
 
     // The rule this project exists to enforce: a ship type may only ever change *to* Capsule;

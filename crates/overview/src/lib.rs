@@ -26,6 +26,7 @@
 
 pub mod layout;
 pub mod row;
+pub mod ship_types;
 pub mod track;
 pub mod util;
 pub mod value;

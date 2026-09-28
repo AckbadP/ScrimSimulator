@@ -1,9 +1,13 @@
 //! Per-pilot identity and time series (DESIGN.md S4.4 "associate rows across ... time by (pilot
 //! name, ship type)"), plus the ship-type transition rule this project layers on top of it: a
 //! pilot's ship type may only ever change *to* `Capsule` (they got podded); any other change is
-//! an OCR mistake, not a real event, and must be flagged rather than accepted.
+//! an OCR mistake, not a real event, and must be flagged rather than accepted. Before that rule
+//! ever sees a reading, [`Tracker::observe`] first snaps it to a known ship via
+//! [`crate::ship_types::ShipTypes`] (DESIGN.md S4.3's candidate-set fuzzy match), so a truncated
+//! or near-miss OCR string (`Tomado`, `Griffin Navy Is`) doesn't masquerade as a type change.
 
 use crate::row::RowReading;
+use crate::ship_types::ShipTypes;
 use crate::util::levenshtein;
 use std::collections::HashMap;
 
@@ -123,6 +127,7 @@ impl Track {
 /// Clusters per-frame [`RowReading`]s into per-pilot [`Track`]s across a video.
 pub struct Tracker {
     tracks: Vec<Track>,
+    ship_types: ShipTypes,
 }
 
 /// Max case-sensitive edit distance between an incoming name reading and a track's current
@@ -133,7 +138,13 @@ const FUZZY_NAME_DISTANCE: usize = 1;
 
 impl Tracker {
     pub fn new() -> Tracker {
-        Tracker { tracks: Vec::new() }
+        Tracker::with_ship_types(ShipTypes::builtin())
+    }
+
+    /// Like [`Tracker::new`], but against an arbitrary ship-type candidate set (tests, or a
+    /// future non-bundled source) instead of the one bundled into this crate.
+    pub fn with_ship_types(ship_types: ShipTypes) -> Tracker {
+        Tracker { tracks: Vec::new(), ship_types }
     }
 
     /// Feed one frame's row readings in at time `t` (seconds).
@@ -143,15 +154,18 @@ impl Tracker {
             if name.is_empty() {
                 continue;
             }
+            // Resolved before indexing into `self.tracks` so the two `self` fields don't need to
+            // be borrowed at the same time.
+            let ship_type = row.ship_type.text.trim();
+            let canonical_type =
+                (!ship_type.is_empty()).then(|| self.ship_types.canonicalize(ship_type).to_string());
+
             let idx = self.find_or_create(name);
             let track = &mut self.tracks[idx];
             track.vote_name(name);
-
-            let ship_type = row.ship_type.text.trim();
-            if !ship_type.is_empty() {
-                track.observe_type(t, ship_type);
+            if let Some(canonical_type) = canonical_type {
+                track.observe_type(t, &canonical_type);
             }
-
             track.samples.push(Sample {
                 t,
                 distance_m: row.distance.ok(),
@@ -303,6 +317,29 @@ mod tests {
         assert_eq!(tracks.len(), 1, "expected the l/I variant to merge, not open a new track");
         assert_eq!(tracks[0].name, "Kyle Katarn", "majority spelling should win");
         assert_eq!(tracks[0].samples.len(), 3);
+    }
+
+    #[test]
+    fn near_miss_type_readings_lock_the_real_ship_with_no_conflict() {
+        let mut tracker = Tracker::new();
+        // "Tornaco" is a single-glyph (c/d) misread of "Tornado"; canonicalizing before
+        // `observe_type` means the bootstrap votes for one real ship instead of splitting between
+        // a real spelling and a fake one.
+        tracker.observe(0.0, &[row("Pilot", "Tornaco", 100.0, 0.0)]);
+        tracker.observe(1.0, &[row("Pilot", "Tornado", 100.0, 0.0)]);
+        tracker.observe(2.0, &[row("Pilot", "Tornaco", 100.0, 0.0)]);
+        let tracks = tracker.finish();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].ship_type.as_deref(), Some("Tornado"));
+        assert!(tracks[0].type_conflicts.is_empty());
+    }
+
+    #[test]
+    fn truncated_type_reading_canonicalizes_to_the_full_name() {
+        let mut tracker = Tracker::new();
+        tracker.observe(0.0, &[row("Pilot", "Griffin Navy Is", 100.0, 0.0)]);
+        let track = &tracker.finish()[0];
+        assert_eq!(track.ship_type.as_deref(), Some("Griffin Navy Issue"));
     }
 
     #[test]
