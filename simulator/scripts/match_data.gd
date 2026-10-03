@@ -10,6 +10,9 @@ const MAX_GAP_S := 5.0
 ## Teams start strung along lines from two cube corners to the centre.
 enum Team { UNKNOWN = -1, BLUE = 0, RED = 1 }
 const CUBE_M := 100000.0
+const CENTRE_M := Vector3.ONE * CUBE_M / 2.0
+## Arena boundary: pilots further than this from the centre are out of bounds (dead).
+const BOUNDARY_RADIUS_M := 125000.0
 ## Pilots starting this close to the centre can't be attributed to a corner line.
 const CENTRE_RADIUS_M := 10000.0
 ## Max distance of a pilot's first position from a corner->centre line to count as on it.
@@ -19,6 +22,9 @@ const LINE_TOLERANCE_M := 10000.0
 var tracks: Dictionary = {}
 ## pilot name -> Team, from each pilot's first position.
 var teams: Dictionary = {}
+## pilot name -> { t: float (match time, s since start), pos: Vector3 (metres) } where the
+## pilot first crossed the arena boundary. Pilots who never left are absent.
+var deaths: Dictionary = {}
 var start_time := 0.0
 var duration := 0.0
 
@@ -68,13 +74,14 @@ static func load_csv(path: String) -> MatchData:
 	data.start_time = t_min
 	data.duration = t_max - t_min
 	data._assign_teams()
+	data._find_deaths()
 	return data
 
 
 ## Puts each pilot on the corner->centre line nearest its first position; the two most
 ## populated corners become BLUE (lower corner index) and RED, everyone else is UNKNOWN.
 func _assign_teams() -> void:
-	var centre := Vector3.ONE * CUBE_M / 2.0
+	var centre := CENTRE_M
 	var corner_of := {}  # pilot -> corner index, or -1
 	var counts := {}  # corner index -> pilot count
 	for pilot in tracks:
@@ -99,6 +106,36 @@ func _assign_teams() -> void:
 	for pilot in tracks:
 		var idx := team_corners.find(corner_of[pilot])
 		teams[pilot] = Team.UNKNOWN if idx < 0 else idx  # 0 = BLUE, 1 = RED
+
+
+## Records where each pilot first left the boundary sphere; later re-entry is ignored.
+func _find_deaths() -> void:
+	for pilot in tracks:
+		var track: Array = tracks[pilot]
+		for i in track.size():
+			var b: Dictionary = track[i]
+			if b.pos.distance_to(CENTRE_M) <= BOUNDARY_RADIUS_M:
+				continue
+			if i == 0:
+				deaths[pilot] = {"t": b.t - start_time, "pos": b.pos}
+			else:
+				var a: Dictionary = track[i - 1]
+				var w := _boundary_crossing(a.pos, b.pos)
+				deaths[pilot] = {"t": lerpf(a.t, b.t, w) - start_time, "pos": a.pos.lerp(b.pos, w)}
+			break
+
+
+## Fraction w in [0, 1] along a->b (a inside, b outside) where the segment hits the boundary.
+static func _boundary_crossing(a: Vector3, b: Vector3) -> float:
+	# Solve |a - c + w (b - a)|^2 = R^2 for w.
+	var d := b - a
+	var f := a - CENTRE_M
+	var qa := d.dot(d)
+	var qb := 2.0 * f.dot(d)
+	var qc := f.dot(f) - BOUNDARY_RADIUS_M * BOUNDARY_RADIUS_M
+	if qa == 0.0:
+		return 1.0
+	return clampf((-qb + sqrt(maxf(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa), 0.0, 1.0)
 
 
 ## Interpolated state of `pilot` at match time `t` (seconds since start), or an empty

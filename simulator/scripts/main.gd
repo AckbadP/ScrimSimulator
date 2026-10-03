@@ -7,6 +7,8 @@ const M_TO_UNITS := 0.001
 const CUBE := 100.0
 const SPEEDS := [0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
 const SEEK_STEP_S := 10.0
+const BOUNDARY_KM := MatchData.BOUNDARY_RADIUS_M * M_TO_UNITS
+const BOUNDARY_COLOR := Color(1.0, 0.45, 0.15)
 const TEAM_COLORS := {
 	MatchData.Team.BLUE: Color(0.25, 0.5, 1.0),
 	MatchData.Team.RED: Color(1.0, 0.25, 0.2),
@@ -18,14 +20,16 @@ var time := 0.0
 var playing := false
 var speed := 1.0
 
-var ships := {}  # pilot -> { node: Node3D, mesh: MeshInstance3D, label: Label3D, ship_type: String, color: Color }
+var ships := {}  # pilot -> { node, mesh, label, ship_type, dead, color, death_t, death_marker }
 var ships_root: Node3D
+var boundary: Node3D
 var sphere_mesh := SphereMesh.new()
 
 var open_dialog: FileDialog
 var play_button: Button
 var timeline: HSlider
 var time_label: Label
+var boundary_toggle: CheckButton
 var file_label: Label
 var _scrubbing := false
 
@@ -35,6 +39,7 @@ func _ready() -> void:
 	sphere_mesh.height = 3.0
 	_build_environment()
 	_build_markers()
+	_build_boundary()
 	ships_root = Node3D.new()
 	add_child(ships_root)
 	_build_ui()
@@ -61,13 +66,16 @@ func load_match(path: String) -> void:
 	var counts := {MatchData.Team.BLUE: 0, MatchData.Team.RED: 0, MatchData.Team.UNKNOWN: 0}
 	for pilot in data.teams:
 		counts[data.teams[pilot]] += 1
-	file_label.text = "%s — %d pilots (blue %d / red %d / unknown %d)" % [
+	file_label.text = "%s — %d pilots (blue %d / red %d / unknown %d), %d out of bounds" % [
 		path.get_file(), ships.size(),
 		counts[MatchData.Team.BLUE], counts[MatchData.Team.RED], counts[MatchData.Team.UNKNOWN],
+		data.deaths.size(),
 	]
 	print("Loaded %s: %d pilots, %.0f s" % [path, ships.size(), data.duration])
 	for pilot in data.teams:
 		print("  %s: %s" % [pilot, MatchData.Team.find_key(data.teams[pilot])])
+	for pilot in data.deaths:
+		print("  %s: out of bounds at %s" % [pilot, _fmt_time(data.deaths[pilot].t)])
 	_seek(0.0)
 	_set_playing(true)
 
@@ -87,7 +95,12 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if data == null or not (event is InputEventKey and event.pressed):
+	if not (event is InputEventKey and event.pressed):
+		return
+	if event.keycode == KEY_B:
+		boundary_toggle.button_pressed = not boundary_toggle.button_pressed
+		return
+	if data == null:
 		return
 	match event.keycode:
 		KEY_SPACE:
@@ -110,6 +123,43 @@ func _add_ship(pilot: String) -> void:
 	mesh.material_override = _material(color, true)
 	node.add_child(mesh)
 
+	var label := _label(color)
+	node.add_child(label)
+
+	node.visible = false
+	ships_root.add_child(node)
+	ships[pilot] = {
+		"node": node, "mesh": mesh, "label": label, "ship_type": "", "dead": false, "color": color,
+		"death_t": INF, "death_marker": null,
+	}
+	if data.deaths.has(pilot):
+		var death: Dictionary = data.deaths[pilot]
+		ships[pilot].death_t = death.t
+		ships[pilot].death_marker = _death_marker(pilot, death, color)
+
+
+## An X where `pilot` crossed the boundary, labelled with the time.
+func _death_marker(pilot: String, death: Dictionary, color: Color) -> Node3D:
+	var marker := Node3D.new()
+	marker.position = death.pos * M_TO_UNITS
+	var bar := BoxMesh.new()
+	bar.size = Vector3(4.0, 0.4, 0.4)
+	var mat := _material(color, false)
+	for angle in [45.0, -45.0]:
+		var m := MeshInstance3D.new()
+		m.mesh = bar
+		m.material_override = mat
+		m.rotation_degrees.z = angle
+		marker.add_child(m)
+	var label := _label(color)
+	label.text = "%s ✕ %s" % [pilot, _fmt_time(death.t)]
+	marker.add_child(label)
+	marker.visible = false
+	ships_root.add_child(marker)
+	return marker
+
+
+static func _label(color: Color) -> Label3D:
 	var label := Label3D.new()
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.fixed_size = true
@@ -119,16 +169,15 @@ func _add_ship(pilot: String) -> void:
 	label.no_depth_test = true
 	label.modulate = color
 	label.position = Vector3(0, 2.5, 0)
-	node.add_child(label)
-
-	node.visible = false
-	ships_root.add_child(node)
-	ships[pilot] = {"node": node, "mesh": mesh, "label": label, "ship_type": "", "color": color}
+	return label
 
 
 func _update_ships() -> void:
 	for pilot in ships:
 		var ship: Dictionary = ships[pilot]
+		var dead: bool = time >= ship.death_t
+		if ship.death_marker:
+			ship.death_marker.visible = dead
 		var s := data.sample(pilot, time)
 		var node: Node3D = ship.node
 		if s.is_empty():
@@ -136,12 +185,18 @@ func _update_ships() -> void:
 			continue
 		node.visible = true
 		node.position = s.pos * M_TO_UNITS
-		if s.ship_type != ship.ship_type:
+		if s.ship_type != ship.ship_type or dead != ship.dead:
 			ship.ship_type = s.ship_type
-			ship.label.text = "%s\n%s" % [pilot, s.ship_type]
+			ship.dead = dead
+			ship.label.text = "%s\n%s%s" % [pilot, s.ship_type, "\nDEAD (out of bounds)" if dead else ""]
 			var pod: bool = s.ship_type == "Capsule"
 			ship.mesh.scale = Vector3.ONE * (0.5 if pod else 1.0)
-			ship.mesh.material_override = _material(ship.color.darkened(0.5) if pod else ship.color, true)
+			var color: Color = ship.color.darkened(0.5) if pod else ship.color
+			if dead:
+				color = color.lerp(Color(0.5, 0.5, 0.5), 0.6)
+				color.a = 0.4
+			ship.mesh.material_override = _material(color, true)
+			ship.label.modulate = color if not dead else Color(color, 0.7)
 
 
 # --- playback ----------------------------------------------------------------
@@ -231,9 +286,51 @@ func _build_markers() -> void:
 	add_child(edges)
 
 
+## Arena boundary: a wireframe sphere plus a faint shell, centred on the cube.
+func _build_boundary() -> void:
+	boundary = Node3D.new()
+	boundary.position = Vector3.ONE * CUBE / 2.0
+	add_child(boundary)
+
+	const SEGMENTS := 96
+	const MERIDIANS := 8
+	const PARALLELS := 5
+	var lines := ImmediateMesh.new()
+	lines.surface_begin(Mesh.PRIMITIVE_LINES)
+	for k in MERIDIANS:
+		var lon := PI * k / MERIDIANS
+		for j in SEGMENTS:
+			for a in [TAU * j / SEGMENTS, TAU * (j + 1) / SEGMENTS]:
+				lines.surface_add_vertex(Vector3(cos(a) * cos(lon), sin(a), cos(a) * sin(lon)) * BOUNDARY_KM)
+	for k in PARALLELS:
+		var lat := PI * (k + 1) / (PARALLELS + 1) - PI / 2.0
+		for j in SEGMENTS:
+			for a in [TAU * j / SEGMENTS, TAU * (j + 1) / SEGMENTS]:
+				lines.surface_add_vertex(Vector3(cos(a) * cos(lat), sin(lat), sin(a) * cos(lat)) * BOUNDARY_KM)
+	lines.surface_end()
+	var wire := MeshInstance3D.new()
+	wire.mesh = lines
+	wire.material_override = _material(Color(BOUNDARY_COLOR, 0.25), false)
+	boundary.add_child(wire)
+
+	var sphere := SphereMesh.new()
+	sphere.radius = BOUNDARY_KM
+	sphere.height = BOUNDARY_KM * 2.0
+	sphere.radial_segments = 64
+	sphere.rings = 32
+	var shell_mat := _material(Color(BOUNDARY_COLOR, 0.04), false)
+	shell_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var shell := MeshInstance3D.new()
+	shell.mesh = sphere
+	shell.material_override = shell_mat
+	boundary.add_child(shell)
+
+
 static func _material(color: Color, shaded: bool) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = color
+	if color.a < 1.0:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	if not shaded:
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	return m
@@ -273,6 +370,13 @@ func _build_ui() -> void:
 	speed_option.select(SPEEDS.find(1.0))
 	speed_option.item_selected.connect(func(idx): speed = SPEEDS[idx])
 	row.add_child(speed_option)
+
+	boundary_toggle = CheckButton.new()
+	boundary_toggle.text = "125 km boundary (B)"
+	boundary_toggle.button_pressed = true
+	boundary_toggle.focus_mode = Control.FOCUS_NONE
+	boundary_toggle.toggled.connect(func(on): boundary.visible = on)
+	row.add_child(boundary_toggle)
 
 	time_label = Label.new()
 	time_label.text = "--:-- / --:--"
