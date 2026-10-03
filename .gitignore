@@ -1,2 +1,7 @@
 /target
 *.mkv
+
+# Godot 4 (simulator/)
+simulator/.godot/
+simulator/android/
+simulator/export/
