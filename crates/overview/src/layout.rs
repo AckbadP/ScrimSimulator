@@ -44,7 +44,7 @@ const IGNORED_HEADER_KEYWORDS: &[&str] = &[
 ];
 
 /// A pixel rectangle within a frame, `[x, x+w) x [y, y+h)`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Rect {
     pub x: u32,
     pub y: u32,
@@ -81,15 +81,35 @@ impl Layout {
         self.columns[&c]
     }
 
-    /// Row `i`'s y (top) and height, or `None` if row `i` would start past `list_bottom`.
+    /// Row `i`'s y (top) and height, or `None` if row `i` doesn't fit above `list_bottom`.
+    ///
+    /// The returned band is inset [`ROW_INSET_PX`] from the row's nominal top and bottom. A row
+    /// cut off by the panel edge is not read at all: its partial glyphs read as confident
+    /// garbage (`"alaiaaxa"`) rather than as blank.
     pub fn row_rect(&self, i: u32) -> Option<(u32, u32)> {
         let y = self.row0_y as f32 + i as f32 * self.row_pitch;
-        if y as u32 + self.row_height / 2 >= self.list_bottom {
+        let top = y.round() as u32 + ROW_INSET_PX;
+        let bottom = y.round() as u32 + self.row_height - ROW_INSET_PX;
+        if bottom > self.list_bottom {
             return None;
         }
-        Some((y.round() as u32, self.row_height))
+        Some((top, bottom - top))
     }
 }
+
+/// Pixels trimmed off the top and bottom of every row band before its cells are read. Row text is
+/// vertically centred with ~10px of slack on each side, but the fitted row grid can land a pixel
+/// off a real background transition (seen on resampled panels, `crate::panel`); a 1px blended
+/// line from a differently-coloured neighbouring row (gray above blue) then spans the whole cell
+/// width and wrecks its bg/fg estimate. Trimming a few pixels removes that line without touching
+/// the glyphs.
+const ROW_INSET_PX: u32 = 3;
+
+/// Row pitch (px) of the overview this crate's thresholds (and `glyph`'s bundled font sample) were
+/// tuned against: the 2560x1600 video fixture, fitted by `detect` at ~43.4px. A panel rendered at
+/// a different UI scale or window size is resampled to this pitch first (`crate::panel`), so
+/// every fixed pixel threshold here and in `glyph` keeps meaning the same thing.
+pub const REF_ROW_PITCH: f32 = 43.4;
 
 /// Minimum height (px) for a detected line band to count as text rather than a hairline
 /// separator (the golden fixtures' row separators, and this crate's own frames, both show these
