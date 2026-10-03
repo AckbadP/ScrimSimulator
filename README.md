@@ -15,3 +15,16 @@ the client itself.
 full design: the multilateration math, OBS/capture requirements, the glyph-matching OCR approach
 (inspired by [darkmatter2222/EVE-Online-Bot](https://github.com/darkmatter2222/EVE-Online-Bot)),
 the on-disk recording format, and the validation plan.
+
+## Simulator (`simulator/`)
+
+A standalone Godot 4.6 replay viewer for the `*.positions.csv` files written by `scrim-positions`.
+Each pilot is a placeholder sphere. Boxes mark the 100 km cube's corners and its centre.
+
+```sh
+godot --path simulator -- --csv /abs/path/to/match_03.positions.csv
+```
+
+You can also load a CSV with the **Open CSV…** button, or by dropping the file onto the window.
+Controls: Space plays/pauses, ←/→ seek 10 s, the slider scrubs. Left/right drag orbits the camera,
+the wheel zooms, and middle drag pans.

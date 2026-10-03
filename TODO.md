@@ -1,0 +1,27 @@
+## Capture setup (OBS / EVE clients)
+- fix eve client window setup
+- fix obs scene
+
+## Position pipeline (crates)
+- may bug when ship comes close enough that distance becomes m instead of km
+
+## Test data (resouces)
+
+
+## GUI
+- pause, play, and navigation of video along with timeline
+- stop updating position of ships once it becomes a capsule
+- ship models based of EVE data export
+- backtrack in time of 100km jump to calculate mjd activaton
+- interpolate smooth movement
+- incoming and outgoing ewar tracking based on combat log
+- togglable vectors for ship movement
+- kills on timeline
+- show boundry (125km sphere) and mjd activation range
+- lookup ship sizes from SDE to properly size ships
+- instead of one unit 1km, should be 1 unit 1m
+- tooltips
+- basic menu for simulator 
+- web interface for simulator
+- add popup for 10s countdown
+- selectable resolution
