@@ -243,3 +243,50 @@ func test_sample_gap_of_exactly_max_is_interpolated() -> void:
 	var g := MatchData.MAX_GAP_S
 	var d := _load([row(0, "p", "x", Vector3.ZERO), row(g, "p", "x", X * g)])
 	assert_almost(d.sample("p", g / 2.0).pos, X * g / 2.0)
+
+
+# --- smooth sample -------------------------------------------------------------
+
+func test_smooth_sample_passes_through_samples() -> void:
+	var d := _sample_data()
+	d.smooth = true
+	assert_eq(d.sample("p", 0.0).pos, Vector3(0, 0, 0))
+	assert_eq(d.sample("p", 2.0).pos, Vector3(20, 0, 0))
+	assert_eq(d.sample("p", 14.0).pos, Vector3(20, 80, 40))
+
+
+func test_smooth_sample_on_straight_even_track_matches_linear() -> void:
+	var d := _load([
+		row(0, "p", "x", Vector3.ZERO), row(1, "p", "x", X * 10.0),
+		row(2, "p", "x", X * 20.0), row(3, "p", "x", X * 30.0),
+	])
+	d.smooth = true
+	for t in [0.25, 1.5, 2.75]:
+		assert_almost(d.sample("p", t).pos, X * 10.0 * t)
+
+
+func test_smooth_sample_curves_and_is_continuous() -> void:
+	var d := _load([
+		row(0, "p", "x", Vector3.ZERO), row(1, "p", "x", Vector3(10, 0, 0)),
+		row(2, "p", "x", Vector3(10, 10, 0)),
+	])
+	d.smooth = true
+	var mid: Vector3 = d.sample("p", 0.5).pos
+	assert_true(mid.distance_to(Vector3(5, 0, 0)) > 0.1, "rounds the corner, not linear")
+	var before: Vector3 = d.sample("p", 0.999).pos
+	var after: Vector3 = d.sample("p", 1.001).pos
+	assert_true(before.distance_to(after) < 0.1, "no jump at the sample")
+	# Velocity is continuous too: both sides head the same way.
+	var v_in: Vector3 = (before - d.sample("p", 0.99).pos).normalized()
+	var v_out: Vector3 = (d.sample("p", 1.01).pos - after).normalized()
+	assert_true(v_in.dot(v_out) > 0.99, "no kink at the sample")
+
+
+func test_smooth_sample_respects_gaps() -> void:
+	var d := _sample_data()
+	d.smooth = true
+	assert_eq(d.sample("p", 6.0), {})
+	# Segments beside the gap still interpolate (mirrored neighbours, no NaN).
+	var s: Vector3 = d.sample("p", 1.0).pos
+	assert_true(s.is_finite())
+	assert_almost(d.sample("p", 12.0).pos, Vector3(20, 80, 20))

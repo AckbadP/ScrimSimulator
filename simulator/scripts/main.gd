@@ -17,6 +17,12 @@ const ICON_PX := 20.0
 const MJU_RADIUS_KM := 1.0
 ## Below this speed (m/s) a model keeps its last heading.
 const MIN_HEADING_SPEED := 5.0
+## With smooth motion, heading is the average velocity over this many seconds either side of
+## now (evens out tracking noise), and models turn toward it with this time constant (match s).
+const HEADING_WINDOW_S := 2.0
+const TURN_TIME_S := 0.6
+## A playback step longer than this (a seek) snaps models to their heading instead of turning.
+const MAX_TURN_STEP_S := 2.0
 ## Hull models point their nose along +Z; `Basis.looking_at` aims -Z, so turn them around.
 const MODEL_FORWARD := Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1))
 const CORNER_COLOR := Color(0.3, 0.7, 1.0)
@@ -36,7 +42,8 @@ var playing := false
 var speed := 1.0
 
 ## pilot -> { node, visual, model_id, icon, label, ship_type, radius, dead, color, tint, death_t,
-## death_marker }; `radius` is the true hull radius in scene units (0 if unknown), `visual` the
+## death_marker, heading, heading_t }; `heading` is the model's rotation as of match time
+## `heading_t`; `radius` is the true hull radius in scene units (0 if unknown), `visual` the
 ## sphere or model under `node`, `model_id` the type ID it shows (0 = sphere), `tint` the colour
 ## the ship is currently drawn in.
 var ships := {}
@@ -48,6 +55,8 @@ var sizes: ShipSizes
 var assets: ShipAssets
 ## Draw hull models + bracket icons instead of spheres (setting `display/ship_models`).
 var models_on := true
+## Smooth ship paths between samples (setting `display/smooth_motion`).
+var smooth_on := true
 ## Corner/centre markers: plain boxes, or MJU models + icons.
 var markers_box: Node3D
 var markers_model: Node3D
@@ -75,6 +84,7 @@ func _ready() -> void:
 	assets = ShipAssets.new()
 	add_child(assets)
 	models_on = Settings.get_value("display/ship_models")
+	smooth_on = Settings.get_value("display/smooth_motion")
 	_build_environment()
 	_build_markers()
 	_build_boundary()
@@ -106,6 +116,7 @@ func load_match(path: String) -> void:
 		file_label.text = "Failed to load %s" % path.get_file()
 		return
 	data = d
+	data.smooth = smooth_on
 	match_path = path
 	for c in ships_root.get_children():
 		c.queue_free()
@@ -190,6 +201,13 @@ func _set_models_on(on: bool) -> void:
 	_apply_visual_mode()
 
 
+func _set_smooth_on(on: bool) -> void:
+	smooth_on = on
+	Settings.set_value("display/smooth_motion", on)
+	if data != null:
+		data.smooth = on
+
+
 ## Switches ships and markers between models + icons and spheres + boxes.
 func _apply_visual_mode() -> void:
 	markers_box.visible = not models_on
@@ -256,7 +274,7 @@ func _add_ship(pilot: String) -> void:
 	ships[pilot] = {
 		"node": node, "visual": visual, "model_id": 0, "icon": icon, "label": label,
 		"ship_type": "", "radius": 0.0, "dead": false, "color": color, "tint": color,
-		"death_t": INF, "death_marker": null,
+		"death_t": INF, "death_marker": null, "heading": Quaternion.IDENTITY, "heading_t": -INF,
 	}
 	if data.deaths.has(pilot):
 		var death: Dictionary = data.deaths[pilot]
@@ -345,7 +363,6 @@ func _update_ships() -> void:
 			continue
 		node.visible = true
 		var pos: Vector3 = s.pos * M_TO_UNITS
-		_face_heading(ship, pilot, pos)
 		node.position = pos
 		if s.ship_type != ship.ship_type or dead != ship.dead:
 			ship.ship_type = s.ship_type
@@ -360,6 +377,7 @@ func _update_ships() -> void:
 			ship.tint = color
 			_refresh_visual(ship)
 			ship.label.modulate = color if not dead else Color(color, 0.7)
+		_face_heading(ship, pilot)
 		var r: float = ship.radius
 		if ship.model_id == 0 or r <= 0.0:
 			r = maxf(r, camera.global_position.distance_to(node.position) * MIN_VISIBLE_ANGLE)
@@ -394,18 +412,32 @@ func _refresh_visual(ship: Dictionary) -> void:
 	_set_icon(ship.icon, tex, Color(color, maxf(color.a, 0.7)))
 
 
-## Turns model ships to face along their movement (half a second of track).
-func _face_heading(ship: Dictionary, pilot: String, pos: Vector3) -> void:
+## Turns model ships to face along their movement. Smooth motion averages the velocity over
+## `HEADING_WINDOW_S` either side and eases the turn; otherwise half a second of track, snapped.
+func _face_heading(ship: Dictionary, pilot: String) -> void:
 	if ship.model_id == 0:
 		return
-	var prev := data.sample(pilot, time - 0.5)
-	if prev.is_empty():
-		return
-	var v: Vector3 = (pos - prev.pos * M_TO_UNITS) / 0.5 / M_TO_UNITS
-	if v.length() < MIN_HEADING_SPEED:
-		return
-	var up := Vector3.UP if absf(v.normalized().y) < 0.99 else Vector3.RIGHT
-	ship.visual.basis = Basis.looking_at(v, up) * MODEL_FORWARD
+	var window := HEADING_WINDOW_S if smooth_on else 0.5
+	var prev := data.sample(pilot, time - window)
+	var next := data.sample(pilot, time + window) if smooth_on else {}
+	var now := data.sample(pilot, time)
+	var a: Dictionary = prev if not prev.is_empty() else now
+	var b: Dictionary = next if not next.is_empty() else now
+	var target: Quaternion = ship.heading
+	if b.t > a.t:
+		var v: Vector3 = (b.pos - a.pos) / (b.t - a.t)
+		if v.length() >= MIN_HEADING_SPEED:
+			var up := Vector3.UP if absf(v.normalized().y) < 0.99 else Vector3.RIGHT
+			target = (Basis.looking_at(v, up) * MODEL_FORWARD).get_rotation_quaternion()
+	var dt: float = time - ship.heading_t
+	ship.heading_t = time
+	if smooth_on and dt > 0.0 and dt <= MAX_TURN_STEP_S:
+		ship.heading = ship.heading.slerp(target, 1.0 - exp(-dt / TURN_TIME_S))
+	elif smooth_on and dt == 0.0:
+		pass  # Paused: hold the current turn.
+	else:
+		ship.heading = target
+	ship.visual.basis = Basis(ship.heading)
 
 
 ## Scene units from the node's centre to just above an `ICON_PX` icon at the camera's distance.
@@ -707,6 +739,12 @@ func _build_settings(layer: CanvasLayer) -> void:
 	models_setting.button_pressed = models_on
 	models_setting.toggled.connect(_set_models_on)
 	box.add_child(models_setting)
+
+	var smooth_setting := CheckBox.new()
+	smooth_setting.text = "Smooth ship movement between position samples (instead of straight lines)"
+	smooth_setting.button_pressed = smooth_on
+	smooth_setting.toggled.connect(_set_smooth_on)
+	box.add_child(smooth_setting)
 
 	var status := Label.new()
 	status.text = sizes.status
