@@ -2,7 +2,7 @@ extends Camera3D
 ## Orbit camera: left/right drag rotates, wheel zooms, middle drag pans.
 
 @export var target := Vector3(50, 50, 50)
-@export var distance := 180.0
+@export var distance := 320.0
 @export var yaw := deg_to_rad(35.0)
 @export var pitch := deg_to_rad(25.0)
 
