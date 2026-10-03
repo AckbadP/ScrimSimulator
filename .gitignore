@@ -8,3 +8,6 @@ simulator/export/
 
 # Match data (recordings, scene configs, extracted CSVs) — kept local, never committed
 resouces/matches/
+
+# EVE Static Data Export cache, downloaded by the simulator on first run
+simulator/sde/

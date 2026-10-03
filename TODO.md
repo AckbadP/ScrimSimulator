@@ -18,10 +18,12 @@
 - togglable vectors for ship movement
 - kills on timeline
 - show boundry (125km sphere) and mjd activation range
-- lookup ship sizes from SDE to properly size ships
 - instead of one unit 1km, should be 1 unit 1m
 - tooltips
 - basic menu for simulator 
 - web interface for simulator
 - add popup for 10s countdown
 - selectable resolution
+- Measure tool to check distance between any two points
+- ability to asign shapes to ships or points (ie 30km shpear around ashimu) that can be color coded
+- anonomyzed example match I can publish

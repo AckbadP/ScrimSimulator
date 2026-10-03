@@ -7,6 +7,9 @@ const M_TO_UNITS := 0.001
 const CUBE := 100.0
 const SPEEDS := [0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
 const SEEK_STEP_S := 10.0
+## Ships are drawn at their real hull radius, but never smaller than this angle (radians) as
+## seen from the camera, so frigates stay visible from across the arena.
+const MIN_VISIBLE_ANGLE := 0.005
 const BOUNDARY_KM := MatchData.BOUNDARY_RADIUS_M * M_TO_UNITS
 const BOUNDARY_COLOR := Color(1.0, 0.45, 0.15)
 const TEAM_COLORS := {
@@ -16,14 +19,19 @@ const TEAM_COLORS := {
 }
 
 var data: MatchData
+var match_path := ""
 var time := 0.0
 var playing := false
 var speed := 1.0
 
-var ships := {}  # pilot -> { node, mesh, label, ship_type, dead, color, death_t, death_marker }
+## pilot -> { node, mesh, label, ship_type, radius, dead, color, death_t, death_marker };
+## `radius` is the true hull radius in scene units (0 if unknown).
+var ships := {}
 var ships_root: Node3D
 var boundary: Node3D
+var camera: Camera3D
 var sphere_mesh := SphereMesh.new()
+var sizes: ShipSizes
 
 var open_dialog: FileDialog
 var play_button: Button
@@ -31,12 +39,17 @@ var timeline: HSlider
 var time_label: Label
 var boundary_toggle: CheckButton
 var file_label: Label
+var sde_label: Label
+var settings_popup: PopupPanel
+var download_dialog: ConfirmationDialog
 var _scrubbing := false
 
 
 func _ready() -> void:
-	sphere_mesh.radius = 1.5
-	sphere_mesh.height = 3.0
+	sphere_mesh.radius = 1.0
+	sphere_mesh.height = 2.0
+	sizes = ShipSizes.new()
+	add_child(sizes)
 	_build_environment()
 	_build_markers()
 	_build_boundary()
@@ -45,6 +58,12 @@ func _ready() -> void:
 	_build_ui()
 	get_window().files_dropped.connect(_on_files_dropped)
 
+	sde_label.text = sizes.status
+	sizes.status_changed.connect(func(text): sde_label.text = text)
+	sizes.needs_download.connect(_prompt_download)
+	sizes.sizes_changed.connect(_on_sizes_changed)
+	sizes.start(Settings.get_value("sde/auto_update"))
+
 	var args := OS.get_cmdline_user_args()
 	var i := args.find("--csv")
 	if i >= 0 and i + 1 < args.size():
@@ -52,11 +71,12 @@ func _ready() -> void:
 
 
 func load_match(path: String) -> void:
-	var d := MatchData.load_csv(path)
+	var d := MatchData.load_csv(path, sizes.radii())
 	if d == null:
 		file_label.text = "Failed to load %s" % path.get_file()
 		return
 	data = d
+	match_path = path
 	for c in ships_root.get_children():
 		c.queue_free()
 	ships.clear()
@@ -78,6 +98,22 @@ func load_match(path: String) -> void:
 		print("  %s: out of bounds at %s" % [pilot, _fmt_time(data.deaths[pilot].t)])
 	_seek(0.0)
 	_set_playing(true)
+
+
+## New SDE data: reload the match so sizes and boundary deaths use it, keeping playback state.
+func _on_sizes_changed() -> void:
+	if data == null:
+		return
+	var t := time
+	var was_playing := playing
+	load_match(match_path)
+	_seek(t)
+	_set_playing(was_playing)
+
+
+func _prompt_download(reason: String) -> void:
+	download_dialog.dialog_text = "%s\n\nDownload it now (~100 MB) so ships are sized by their real hull radius?" % reason
+	download_dialog.popup_centered()
 
 
 func _process(delta: float) -> void:
@@ -129,7 +165,8 @@ func _add_ship(pilot: String) -> void:
 	node.visible = false
 	ships_root.add_child(node)
 	ships[pilot] = {
-		"node": node, "mesh": mesh, "label": label, "ship_type": "", "dead": false, "color": color,
+		"node": node, "mesh": mesh, "label": label, "ship_type": "", "radius": 0.0, "dead": false,
+		"color": color,
 		"death_t": INF, "death_marker": null,
 	}
 	if data.deaths.has(pilot):
@@ -187,16 +224,19 @@ func _update_ships() -> void:
 		node.position = s.pos * M_TO_UNITS
 		if s.ship_type != ship.ship_type or dead != ship.dead:
 			ship.ship_type = s.ship_type
+			ship.radius = data.radius_m(s.ship_type) * M_TO_UNITS
 			ship.dead = dead
 			ship.label.text = "%s\n%s%s" % [pilot, s.ship_type, "\nDEAD (out of bounds)" if dead else ""]
 			var pod: bool = s.ship_type == "Capsule"
-			ship.mesh.scale = Vector3.ONE * (0.5 if pod else 1.0)
 			var color: Color = ship.color.darkened(0.5) if pod else ship.color
 			if dead:
 				color = color.lerp(Color(0.5, 0.5, 0.5), 0.6)
 				color.a = 0.4
 			ship.mesh.material_override = _material(color, true)
 			ship.label.modulate = color if not dead else Color(color, 0.7)
+		var r := maxf(ship.radius, camera.global_position.distance_to(node.position) * MIN_VISIBLE_ANGLE)
+		ship.mesh.scale = Vector3.ONE * r
+		ship.label.position.y = r * 1.6
 
 
 # --- playback ----------------------------------------------------------------
@@ -243,10 +283,10 @@ func _build_environment() -> void:
 	sun.rotation_degrees = Vector3(-50, 30, 0)
 	add_child(sun)
 
-	var cam := Camera3D.new()
-	cam.set_script(preload("res://scripts/orbit_camera.gd"))
-	cam.target = Vector3.ONE * CUBE / 2.0
-	add_child(cam)
+	camera = Camera3D.new()
+	camera.set_script(preload("res://scripts/orbit_camera.gd"))
+	camera.target = Vector3.ONE * CUBE / 2.0
+	add_child(camera)
 
 
 func _build_markers() -> void:
@@ -382,6 +422,15 @@ func _build_ui() -> void:
 	time_label.text = "--:-- / --:--"
 	row.add_child(time_label)
 
+	var settings_button := Button.new()
+	settings_button.text = "Settings…"
+	settings_button.pressed.connect(func(): settings_popup.popup_centered())
+	row.add_child(settings_button)
+
+	sde_label = Label.new()
+	sde_label.modulate = Color(1, 1, 1, 0.6)
+	row.add_child(sde_label)
+
 	file_label = Label.new()
 	file_label.text = "No match loaded — open or drop a *.positions.csv"
 	file_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -403,6 +452,49 @@ func _build_ui() -> void:
 	open_dialog.use_native_dialog = true
 	open_dialog.file_selected.connect(load_match)
 	layer.add_child(open_dialog)
+
+	download_dialog = ConfirmationDialog.new()
+	download_dialog.title = "EVE Static Data Export"
+	download_dialog.ok_button_text = "Download"
+	download_dialog.cancel_button_text = "Not now"
+	download_dialog.confirmed.connect(sizes.full_download)
+	layer.add_child(download_dialog)
+
+	_build_settings(layer)
+
+
+func _build_settings(layer: CanvasLayer) -> void:
+	settings_popup = PopupPanel.new()
+	layer.add_child(settings_popup)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	settings_popup.add_child(box)
+
+	var title := Label.new()
+	title.text = "Settings"
+	box.add_child(title)
+
+	var auto_update := CheckBox.new()
+	auto_update.text = "Check for EVE static data (SDE) updates on startup"
+	auto_update.button_pressed = Settings.get_value("sde/auto_update")
+	auto_update.toggled.connect(func(on): Settings.set_value("sde/auto_update", on))
+	box.add_child(auto_update)
+
+	var status := Label.new()
+	status.text = sizes.status
+	sizes.status_changed.connect(func(text): status.text = text)
+	box.add_child(status)
+
+	var buttons := HBoxContainer.new()
+	box.add_child(buttons)
+	var check := Button.new()
+	check.text = "Check for updates now"
+	check.pressed.connect(sizes.check_update)
+	buttons.add_child(check)
+	var redownload := Button.new()
+	redownload.text = "Re-download SDE"
+	redownload.pressed.connect(sizes.full_download)
+	buttons.add_child(redownload)
 
 
 func _on_files_dropped(files: PackedStringArray) -> void:
