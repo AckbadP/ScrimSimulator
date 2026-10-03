@@ -6,6 +6,7 @@ extends RefCounted
 static var path := "user://settings.cfg"
 const DEFAULTS := {
 	"sde/auto_update": true,
+	"display/ship_models": true,
 }
 
 static var _cfg: ConfigFile

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build release bundles of the Godot simulator and the scrim-positions OCR tool.
+# Build release bundles of the Godot simulator (plus its glb-undraco model helper) and the
+# scrim-positions OCR tool.
 #
 #   scripts/build.sh [linux|windows|all]    (default: all)
 #
@@ -67,7 +68,7 @@ export_simulator() { # <preset> <path relative to simulator/>
     "$GODOT" --headless --path simulator --export-release "$1" "$2"
 }
 
-write_readme() { # <dir> <sim exe> <ocr exe>
+write_readme() { # <dir> <sim exe> <ocr exe> <undraco exe>
     cat > "$1/README.txt" <<EOF
 Scrim Simulator ${VERSION}
 
@@ -76,7 +77,12 @@ $2
     dropping it onto the window, or from the command line:
         $2 -- --csv /path/to/match.positions.csv
     Ship sizes are downloaded from the EVE static data export into sde/ next to the
-    executable on first run.
+    executable on first run. Ships are drawn as their hull models with overview icons
+    (toggle with M or in Settings); the icons and models are downloaded into sde/assets/,
+    each hull the first time a match needs it.
+
+$4
+    Helper the simulator runs to decompress downloaded ship models. Keep it next to $2.
 
 $3
     OCRs a three-observer scrim recording into <video>.positions.csv:
@@ -87,23 +93,24 @@ Source: https://github.com/AckbadP/ScrimSimulator
 EOF
 }
 
-package() { # <platform> <sim exe path> <ocr exe path>
+package() { # <platform> <sim exe path> <ocr exe path> <undraco exe path>
     local name="scrim-simulator-${VERSION}-$1-x86_64"
     local stage="$DIST/$name"
     rm -rf "$stage" "$DIST/$name.zip"
     mkdir -p "$stage"
-    cp "$2" "$3" "$stage/"
-    write_readme "$stage" "$(basename "$2")" "$(basename "$3")"
+    cp "$2" "$3" "$4" "$stage/"
+    write_readme "$stage" "$(basename "$2")" "$(basename "$3")" "$(basename "$4")"
     (cd "$DIST" && zip -q -r "$name.zip" "$name")
     log "built dist/$name.zip"
 }
 
 build_linux() {
     log "building scrim-positions (linux)"
-    cargo build --release -p overview --bin scrim-positions
+    cargo build --release -p overview --bin scrim-positions -p glb-undraco
     log "exporting simulator (linux)"
     export_simulator "Linux" "export/linux/scrim-simulator.x86_64"
-    package linux simulator/export/linux/scrim-simulator.x86_64 target/release/scrim-positions
+    package linux simulator/export/linux/scrim-simulator.x86_64 target/release/scrim-positions \
+        target/release/glb-undraco
 }
 
 build_windows() {
@@ -115,10 +122,11 @@ build_windows() {
         rustup target add "$WIN_TARGET"
     fi
     log "building scrim-positions (windows)"
-    cargo build --release -p overview --bin scrim-positions --target "$WIN_TARGET"
+    cargo build --release -p overview --bin scrim-positions -p glb-undraco --target "$WIN_TARGET"
     log "exporting simulator (windows)"
     export_simulator "Windows Desktop" "export/windows/scrim-simulator.exe"
-    package windows simulator/export/windows/scrim-simulator.exe "target/$WIN_TARGET/release/scrim-positions.exe"
+    package windows simulator/export/windows/scrim-simulator.exe "target/$WIN_TARGET/release/scrim-positions.exe" \
+        "target/$WIN_TARGET/release/glb-undraco.exe"
 }
 
 ensure_godot

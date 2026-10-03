@@ -52,6 +52,8 @@ func test_lookups_are_case_insensitive() -> void:
 	assert_eq(s.radius_m("RIFTER"), 31.0)
 	assert_eq(s.radius_m("Merlin"), 0.0)
 	assert_eq(s.radii(), {"rifter": 31.0})
+	assert_eq(s.ship("rIFTER").type_id, 587)
+	assert_eq(s.ship("Merlin"), {})
 
 
 func test_summary_reflects_loaded_state() -> void:
@@ -103,7 +105,7 @@ func test_cache_round_trip() -> void:
 	var a := _sizes(dir)
 	a.build = 3000000
 	a.release_date = "2026-09-01T11:00:00Z"
-	a.ship_groups = {25: true}
+	a.ship_groups = {25: "Frigate"}
 	a.ships = {"rifter": _rifter()}
 	a._save_cache()
 
@@ -111,7 +113,7 @@ func test_cache_round_trip() -> void:
 	b._load_cache()
 	assert_eq(b.build, 3000000)
 	assert_eq(b.release_date, "2026-09-01T11:00:00Z")
-	assert_eq(b.ship_groups.keys(), [25])
+	assert_eq(b.ship_groups, {25: "Frigate"})
 	assert_eq(b.ships.keys(), ["rifter"])
 	var r: Dictionary = b.ships["rifter"]
 	assert_eq(r.name, "Rifter")
@@ -119,6 +121,15 @@ func test_cache_round_trip() -> void:
 	assert_eq(r.group_id, 25)
 	assert_eq(r.radius_m, 31.0)
 	assert_eq(b.status, b._summary())
+
+
+func test_old_cache_group_list_loads_without_names() -> void:
+	var s := _sizes()
+	var f := FileAccess.open(s._cache_path(), FileAccess.WRITE)
+	f.store_string(JSON.stringify({"build": 1, "ship_groups": [25, 29], "ships": {}}))
+	f.close()
+	s._load_cache()
+	assert_eq(s.ship_groups, {25: "", 29: ""})
 
 
 func test_missing_cache_leaves_sizes_unloaded() -> void:
@@ -149,7 +160,7 @@ func test_extract_ships_from_sde_zip() -> void:
 	assert_eq(out.error, "")
 	assert_eq(out.build, 3000000)
 	assert_eq(out.release_date, "2026-09-01T11:00:00Z")
-	assert_eq(out.groups, {25: true, 29: true})
+	assert_eq(out.groups, {25: "Frigate", 29: "Capsule"})
 	var names: Array = out.ships.keys()
 	names.sort()
 	assert_eq(names, ["capsule", "rifter"], "only published ships")
