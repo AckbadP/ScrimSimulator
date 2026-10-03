@@ -16,6 +16,7 @@ func before_each() -> void:
 	Settings.path = temp_dir().path_join("settings.cfg")
 	Settings._cfg = null
 	Settings.set_value("sde/auto_update", false)
+	Settings.set_value("display/ship_models", false)
 
 
 func after_each() -> void:
@@ -173,3 +174,92 @@ func test_boundary_toggle() -> void:
 	assert_true(m.boundary.visible)
 	m.boundary_toggle.button_pressed = false
 	assert_false(m.boundary.visible)
+
+
+# --- ship models -----------------------------------------------------------------
+
+## A viewer whose asset cache is a temp dir holding the MJU model (standing in for "Test Hull",
+## a 50 m frigate) and a couple of brackets, so model mode never touches the network.
+func _model_main(cache_model := true) -> Main:
+	var m := _main()
+	m.sizes.ships = {"test hull": {"name": "Test Hull", "type_id": 33591, "group_id": 25, "radius_m": 50.0}}
+	var dir := temp_dir()
+	DirAccess.make_dir_recursive_absolute(dir.path_join("models"))
+	DirAccess.make_dir_recursive_absolute(dir.path_join("brackets"))
+	DirAccess.copy_absolute(ProjectSettings.globalize_path("res://tests/fixtures/mobile-micro-jump-unit.glb"),
+		dir.path_join("models/33591.glb"))
+	var img := Image.create(32, 32, false, Image.FORMAT_RGBA8)
+	img.save_png(dir.path_join("brackets/frigate_32.png"))
+	img.save_png(dir.path_join("brackets/mobilemicrojumpunit.png"))
+	var a := m.assets
+	a._dir = dir
+	a.has_brackets = true
+	# Without the model, an empty index keeps `ensure_models` from downloading it.
+	a.index = {33591: "extra_models/33591_lite.glb"} if cache_model else {}
+	a.models = {33591: ""} if cache_model else {}
+	a._scenes.clear()
+	a._textures.clear()
+	m.load_match(_match_csv())
+	return m
+
+
+func test_models_off_draws_spheres() -> void:
+	var m := _model_main()
+	assert_false(m.models_on)
+	m._seek(0.0)
+	m._update_ships()
+	var blue: Dictionary = m.ships["blue"]
+	assert_eq(blue.model_id, 0)
+	assert_eq(blue.visual.mesh, m.sphere_mesh)
+	assert_false(blue.icon.visible)
+	assert_true(m.markers_box.visible)
+	assert_false(m.markers_model.visible)
+
+
+func test_models_on_draws_model_and_icon() -> void:
+	var m := _model_main()
+	m._set_models_on(true)
+	assert_true(Settings.get_value("display/ship_models"))
+	assert_true(m.models_toggle.button_pressed)
+	assert_true(m.models_setting.button_pressed)
+	m._seek(0.0)
+	m._update_ships()
+	var blue: Dictionary = m.ships["blue"]
+	assert_eq(blue.model_id, 33591)
+	assert_false(blue.visual is MeshInstance3D, "model, not the sphere")
+	assert_almost(blue.visual.scale, Vector3.ONE * 0.05, 1e-4, "true 50 m radius, no min-size clamp")
+	assert_true(blue.icon.visible)
+	assert_true(blue.icon.fixed_size)
+	assert_not_null(blue.icon.texture)
+	assert_false(m.markers_box.visible)
+	assert_true(m.markers_model.visible)
+	assert_eq(m.markers_model.get_child_count(), 9)
+
+	m._set_models_on(false)
+	m._update_ships()
+	assert_eq(blue.model_id, 0)
+	assert_eq(blue.visual.mesh, m.sphere_mesh)
+	assert_false(blue.icon.visible)
+	assert_false(Settings.get_value("display/ship_models"))
+
+
+func test_uncached_model_falls_back_to_sphere_with_icon() -> void:
+	var m := _model_main(false)
+	m._set_models_on(true)
+	m._seek(0.0)
+	m._update_ships()
+	var blue: Dictionary = m.ships["blue"]
+	assert_eq(blue.model_id, 0)
+	assert_eq(blue.visual.mesh, m.sphere_mesh)
+	assert_true(blue.icon.visible)
+
+
+func test_model_key_toggles() -> void:
+	var m := _model_main()
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.keycode = KEY_M
+	m._unhandled_input(key)
+	assert_true(m.models_on)
+	m._unhandled_input(key)
+	assert_false(m.models_on)
