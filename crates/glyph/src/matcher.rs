@@ -113,6 +113,18 @@ fn best_two<'a>(templates: &'a [Template], cell: &CoverageMap, alphabet: Alphabe
 /// `k`-for-`km` case; that context is unavailable here.
 const CONFIDENT_SINGLE_SCORE: f32 = 0.90;
 
+/// How much wider (px) than its best single-glyph template a run may be and still have that
+/// match trusted outright under [`CONFIDENT_SINGLE_SCORE`]. A run with this much unexplained ink
+/// is a fused pair, not one glyph: real video produced `km` read confidently as just `m` (the `m`
+/// template sliding onto the right half of a 29px run, scoring 0.96 while ignoring the `k`), a
+/// 1000x distance error. Such a run is always tried as a split, and its single-glyph score is
+/// discounted by how little of the run the template covers (`classify_span`).
+///
+/// Numeric cells only: their alphabet has exactly one wide glyph (`m`) and no fused pair that
+/// could plausibly be one glyph. On name text the same rule over-splits (`J` -> `I.`, measured
+/// against `crates/overview`'s video fixture), so name/type columns keep the old behaviour.
+const WIDE_RUN_SLACK: usize = 6;
+
 /// Splitting only wins over the single-glyph reading when it beats it by more than this much,
 /// per resulting glyph — otherwise a run that's genuinely one (slightly odd) glyph would flip to
 /// a spurious two-glyph reading on noise alone.
@@ -142,6 +154,7 @@ fn classify_span(
     let glyph_cell = cell.slice_cols(x0, x1);
     let scored = best_two(templates, &glyph_cell, alphabet);
     let (top_score, top_ch) = scored.first().map(|&(s, t)| (s, t.ch)).unwrap_or((0.0, '?'));
+    let top_width = scored.first().map(|&(_, t)| t.width).unwrap_or(0);
     let second_score = scored.get(1).map(|&(s, _)| s).unwrap_or(-1.0);
     let single = CharReading {
         ch: top_ch,
@@ -149,7 +162,9 @@ fn classify_span(
         margin: top_score - second_score,
     };
 
-    if splits_left == 0 || top_score >= CONFIDENT_SINGLE_SCORE || x1 - x0 < 2 * MIN_GLYPH_WIDTH {
+    let too_wide = alphabet == Alphabet::Numeric && x1 - x0 > top_width + WIDE_RUN_SLACK;
+    let confident = top_score >= CONFIDENT_SINGLE_SCORE && !too_wide;
+    if splits_left == 0 || confident || x1 - x0 < 2 * MIN_GLYPH_WIDTH {
         return vec![single];
     }
 
@@ -164,7 +179,14 @@ fn classify_span(
     let split_score =
         (left.iter().chain(right.iter()).map(|c| c.score).sum::<f32>()) / n - SPLIT_PENALTY;
 
-    if split_score > top_score {
+    // An over-wide run's single-glyph score only measures the template's own slice of it; scale
+    // it by the share of the run the template covers so the unexplained ink counts against it.
+    let single_score = if too_wide {
+        top_score * top_width as f32 / (x1 - x0) as f32
+    } else {
+        top_score
+    };
+    if split_score > single_score {
         let mut combined = left;
         combined.extend(right);
         combined

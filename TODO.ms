@@ -1,0 +1,4 @@
+- fix obs scene
+- fix eve client window setup
+- output ship positions after calcs, not raw data
+- split example vid into requisite matches
