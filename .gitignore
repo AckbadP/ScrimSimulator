@@ -5,3 +5,6 @@
 simulator/.godot/
 simulator/android/
 simulator/export/
+
+# Match data (recordings, scene configs, extracted CSVs) — kept local, never committed
+resouces/matches/
