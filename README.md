@@ -1,5 +1,8 @@
 # scrim-recorder
 
+**[Download the latest release](https://github.com/AckbadP/ScrimSimulator/releases/latest)**
+(Linux and Windows builds of the simulator and `scrim-positions`).
+
 A tool that records everything that happened on an EVE Online grid — ship positions, velocities,
 pilots, ship types, and damage/effect events — as a compressed recording for later replay and
 simulation. Three or four stationary observer clients are recorded on video; every ship's position
