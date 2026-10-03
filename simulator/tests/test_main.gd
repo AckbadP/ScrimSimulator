@@ -130,6 +130,7 @@ func test_playback_stops_at_end_and_restarts() -> void:
 
 func test_ship_visibility_and_position() -> void:
 	var m := _main()
+	m._set_smooth_on(false)  # Linear, so mid-segment positions are easy to state.
 	m.load_match(_match_csv())
 	m._seek(0.0)
 	m._update_ships()
@@ -263,3 +264,71 @@ func test_model_key_toggles() -> void:
 	assert_true(m.models_on)
 	m._unhandled_input(key)
 	assert_false(m.models_on)
+
+
+func test_smooth_motion_setting() -> void:
+	var m := _main()
+	assert_true(m.smooth_on, "on by default")
+	m.load_match(_match_csv())
+	assert_true(m.data.smooth)
+	m._set_smooth_on(false)
+	assert_false(m.data.smooth)
+	assert_eq(Settings.get_value("display/smooth_motion"), false)
+	m.load_match(_match_csv())
+	assert_false(m.data.smooth, "new match picks up the setting")
+
+
+## "p" flies +X at 1 km/s for 10 s, then turns to +Y. Its ship is flagged as a model so
+## `_face_heading` rotates it (tests run with models off).
+func _turning_ship(m: Main) -> Dictionary:
+	var rows := []
+	for t in 21:
+		var p := C + (X * t if t <= 10 else X * 10.0 + Vector3.UP * (t - 10)) * 1000.0
+		rows.append(row(t, "p", "Test Hull", p))
+	m.load_match(write_csv(rows))
+	var ship: Dictionary = m.ships["p"]
+	ship.model_id = 1
+	return ship
+
+
+func _nose(ship: Dictionary) -> Vector3:
+	return ship.visual.basis.z.normalized()
+
+
+func test_smooth_heading_turns_gradually() -> void:
+	var m := _main()
+	var ship := _turning_ship(m)
+	m.time = 5.0
+	m._face_heading(ship, "p")
+	assert_almost(_nose(ship), X, 1e-3, "first update snaps to the heading")
+	var last := _nose(ship)
+	var max_step := 0.0
+	for i in 100:
+		m.time = 5.0 + (i + 1) * 0.1
+		m._face_heading(ship, "p")
+		max_step = maxf(max_step, last.angle_to(_nose(ship)))
+		last = _nose(ship)
+	assert_true(max_step < 0.1, "no sudden turn (max %.3f rad per 0.1 s)" % max_step)
+	assert_true(_nose(ship).angle_to(Vector3.UP) < 0.1, "ends up facing the new course")
+
+
+func test_smooth_heading_snaps_on_seek() -> void:
+	var m := _main()
+	var ship := _turning_ship(m)
+	m.time = 5.0
+	m._face_heading(ship, "p")
+	m.time = 15.0
+	m._face_heading(ship, "p")
+	assert_almost(_nose(ship), Vector3.UP, 1e-3)
+
+
+func test_heading_without_smoothing_snaps() -> void:
+	var m := _main()
+	m._set_smooth_on(false)
+	var ship := _turning_ship(m)
+	m.time = 9.0
+	m._face_heading(ship, "p")
+	assert_almost(_nose(ship), X, 1e-3)
+	m.time = 10.6
+	m._face_heading(ship, "p")
+	assert_almost(_nose(ship), Vector3.UP, 1e-3, "faces the new course right away")

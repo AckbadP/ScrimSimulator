@@ -31,6 +31,8 @@ var deaths: Dictionary = {}
 var radii: Dictionary = {}
 var start_time := 0.0
 var duration := 0.0
+## Follow a Catmull-Rom spline through the samples instead of straight lines between them.
+var smooth := false
 
 
 static func load_csv(path: String, ship_radii := {}) -> MatchData:
@@ -167,4 +169,18 @@ func sample(pilot: String, t: float) -> Dictionary:
 	if b.t - a.t > MAX_GAP_S:
 		return {}
 	var w: float = (t - a.t) / (b.t - a.t)
-	return {"t": t, "pos": a.pos.lerp(b.pos, w), "ship_type": a.ship_type}
+	if not smooth:
+		return {"t": t, "pos": a.pos.lerp(b.pos, w), "ship_type": a.ship_type}
+	var pre := _neighbour(track, i - 2, a, b)
+	var post := _neighbour(track, i + 1, b, a)
+	var pos: Vector3 = a.pos.cubic_interpolate_in_time(
+			b.pos, pre.pos, post.pos, w, b.t - a.t, pre.t - a.t, post.t - a.t)
+	return {"t": t, "pos": pos, "ship_type": a.ship_type}
+
+
+## Spline control point beyond `end` (away from `other`): `track[j]` if it exists and isn't
+## across a gap, else `other` mirrored through `end`.
+static func _neighbour(track: Array, j: int, end: Dictionary, other: Dictionary) -> Dictionary:
+	if j >= 0 and j < track.size() and absf(track[j].t - end.t) <= MAX_GAP_S:
+		return track[j]
+	return {"t": end.t * 2.0 - other.t, "pos": end.pos * 2.0 - other.pos}
