@@ -51,6 +51,9 @@ pub struct Track {
     type_votes: HashMap<String, u32>,
 
     pub capsule_events: Vec<f64>,
+    /// The ship type locked before the pilot was podded (`ship_type` is `Capsule` from then on),
+    /// so callers can still say what the pilot was flying before `capsule_events[0]`.
+    pub lost_ship: Option<String>,
     pub type_conflicts: Vec<TypeConflict>,
 
     pub samples: Vec<Sample>,
@@ -65,6 +68,7 @@ impl Track {
             type_bootstrap: Vec::new(),
             type_votes: HashMap::new(),
             capsule_events: Vec::new(),
+            lost_ship: None,
             type_conflicts: Vec::new(),
             samples: Vec::new(),
         }
@@ -91,6 +95,7 @@ impl Track {
         }
         if observed == CAPSULE {
             self.capsule_events.push(t);
+            self.lost_ship = Some(current.to_string());
             self.ship_type = Some(CAPSULE.to_string());
         } else {
             self.type_conflicts.push(TypeConflict {
@@ -280,6 +285,7 @@ mod tests {
         tr.observe_type(10.0, CAPSULE);
         assert_eq!(tr.ship_type.as_deref(), Some(CAPSULE));
         assert_eq!(tr.capsule_events, vec![10.0]);
+        assert_eq!(tr.lost_ship.as_deref(), Some("Tornado"));
         assert!(tr.type_conflicts.is_empty());
     }
 

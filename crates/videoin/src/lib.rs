@@ -100,15 +100,26 @@ impl Decoder {
     /// Open a video file, probing its dimensions/framerate and starting an `ffmpeg` process that
     /// streams raw RGB24 frames on stdout.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Decoder> {
-        let path = path.as_ref();
-        let (width, height, fps) = probe(path)?;
+        Decoder::open_with_fps(path, None)
+    }
 
-        let mut child = Command::new("ffmpeg")
-            .args(["-v", "error", "-i"])
-            .arg(path)
-            .args([
-                "-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
-            ])
+    /// Like [`Decoder::open`], but resampled by ffmpeg to `fps` frames per second (`None`: the
+    /// source rate). Sampling a long recording at a few Hz this way avoids piping every
+    /// full-resolution frame only to discard most of them; `Frame::t` is then `index / fps`.
+    pub fn open_with_fps(path: impl AsRef<std::path::Path>, fps: Option<f64>) -> Result<Decoder> {
+        let path = path.as_ref();
+        let (width, height, src_fps) = probe(path)?;
+        if let Some(f) = fps {
+            ensure!(f > 0.0, "fps must be positive, got {f}");
+        }
+
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-v", "error", "-i"]).arg(path).args(["-map", "0:v:0"]);
+        if let Some(f) = fps {
+            cmd.args(["-vf", &format!("fps={f}")]);
+        }
+        let mut child = cmd
+            .args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -119,7 +130,7 @@ impl Decoder {
         Ok(Decoder {
             width,
             height,
-            fps,
+            fps: fps.unwrap_or(src_fps),
             child,
             stdout,
             index: 0,
