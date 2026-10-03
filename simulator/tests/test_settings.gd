@@ -28,3 +28,7 @@ func test_set_value_persists() -> void:
 	assert_true(FileAccess.file_exists(Settings.path))
 	Settings._cfg = null  # Force a reload from disk.
 	assert_eq(Settings.get_value("sde/auto_update"), false)
+
+
+func test_ship_models_default_on() -> void:
+	assert_eq(Settings.get_value("display/ship_models"), true)

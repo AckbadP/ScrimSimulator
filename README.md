@@ -22,11 +22,22 @@ the on-disk recording format, and the validation plan.
 ## Simulator (`simulator/`)
 
 A standalone Godot 4.6 replay viewer for the `*.positions.csv` files written by `scrim-positions`.
-Each pilot is a placeholder sphere. Boxes mark the 100 km cube's corners and its centre.
+Each pilot is drawn as its hull model at its SDE hull radius, with the overview bracket icon
+overlaid at a constant on-screen size so small hulls stay visible. Mobile Micro Jump Units mark the
+100 km cube's corners and its centre. **M** (or Settings) switches back to plain spheres and boxes.
 
 ```sh
+cargo build --release -p glb-undraco   # model decompressor the simulator runs from target/
 godot --path simulator -- --csv /abs/path/to/match_03.positions.csv
 ```
+
+Ship sizes come from CCP's Static Data Export. Hull models come from
+[EVE_Model_Gallery](https://github.com/EstamelGG/EVE_Model_Gallery), and bracket icons from CCP's
+Image Export Collection. All three are downloaded with your consent into `simulator/sde/`, or into
+`sde/` next to the executable in a release build. Models are fetched one hull at a time, the first
+time a match needs it. The gallery's GLBs are Draco-compressed, which Godot can't load, so
+`glb-undraco` (`crates/glb-undraco`) rewrites each one when it is downloaded. If the helper isn't
+found, ships fall back to spheres.
 
 You can also load a CSV with the **Open CSV…** button, or by dropping the file onto the window.
 Controls: Space plays/pauses, ←/→ seek 10 s, the slider scrubs. Left/right drag orbits the camera,
@@ -35,8 +46,8 @@ the wheel zooms, and middle drag pans.
 ### Tests
 
 `simulator/tests/` holds a headless, dependency-free test suite (CSV loading, team assignment,
-boundary deaths, interpolation, SDE cache/zip parsing, settings, camera, and playback in
-`main.gd`). Each `test_*.gd` extends `tests/test_case.gd`; every `test_*` method is a test.
+boundary deaths, interpolation, SDE cache/zip parsing, ship model/icon loading, settings, camera,
+and playback in `main.gd`). Each `test_*.gd` extends `tests/test_case.gd`; every `test_*` method is a test.
 
 ```sh
 scripts/test.sh               # all tests (uses $GODOT or `godot` on PATH)
@@ -47,7 +58,7 @@ scripts/test.sh match_data    # only test files whose name contains "match_data"
 
 ## Building releases
 
-`scripts/build.sh [linux|windows|all]` builds the simulator (Godot export) and `scrim-positions`
+`scripts/build.sh [linux|windows|all]` builds the simulator (Godot export), `glb-undraco`, and `scrim-positions`
 and zips each platform into `dist/`. It runs on Ubuntu; the Windows build is cross-compiled and
 needs `sudo apt install mingw-w64`. Godot 4.6 and its export templates are downloaded on first
 run if missing (set `$GODOT` to use a specific binary).

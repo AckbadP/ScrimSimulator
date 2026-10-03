@@ -51,6 +51,7 @@ func before_each() -> void:
 	Settings.path = temp_dir().path_join("settings.cfg")
 	Settings._cfg = null
 	Settings.set_value("sde/auto_update", false)
+	Settings.set_value("display/ship_models", false)
 
 
 func after_each() -> void:
