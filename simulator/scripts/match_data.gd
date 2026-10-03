@@ -11,7 +11,8 @@ const MAX_GAP_S := 5.0
 enum Team { UNKNOWN = -1, BLUE = 0, RED = 1 }
 const CUBE_M := 100000.0
 const CENTRE_M := Vector3.ONE * CUBE_M / 2.0
-## Arena boundary: pilots further than this from the centre are out of bounds (dead).
+## Arena boundary: pilots whose hull reaches further than this from the centre are out of
+## bounds (dead).
 const BOUNDARY_RADIUS_M := 125000.0
 ## Pilots starting this close to the centre can't be attributed to a corner line.
 const CENTRE_RADIUS_M := 10000.0
@@ -25,11 +26,14 @@ var teams: Dictionary = {}
 ## pilot name -> { t: float (match time, s since start), pos: Vector3 (metres) } where the
 ## pilot first crossed the arena boundary. Pilots who never left are absent.
 var deaths: Dictionary = {}
+## Lowercase ship type -> published hull radius in metres (from `ShipSizes`); unknown types
+## count as points.
+var radii: Dictionary = {}
 var start_time := 0.0
 var duration := 0.0
 
 
-static func load_csv(path: String) -> MatchData:
+static func load_csv(path: String, ship_radii := {}) -> MatchData:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		push_error("Cannot open %s: %s" % [path, error_string(FileAccess.get_open_error())])
@@ -44,6 +48,7 @@ static func load_csv(path: String) -> MatchData:
 			return null
 
 	var data := MatchData.new()
+	data.radii = ship_radii
 	var t_min := INF
 	var t_max := -INF
 	while not f.eof_reached():
@@ -108,31 +113,39 @@ func _assign_teams() -> void:
 		teams[pilot] = Team.UNKNOWN if idx < 0 else idx  # 0 = BLUE, 1 = RED
 
 
-## Records where each pilot first left the boundary sphere; later re-entry is ignored.
+## Hull radius of `ship_type` in metres, or 0.0 if unknown.
+func radius_m(ship_type: String) -> float:
+	return radii.get(ship_type.to_lower(), 0.0)
+
+
+## Records where each pilot's hull first touched the boundary sphere; later re-entry is ignored.
 func _find_deaths() -> void:
 	for pilot in tracks:
 		var track: Array = tracks[pilot]
 		for i in track.size():
 			var b: Dictionary = track[i]
-			if b.pos.distance_to(CENTRE_M) <= BOUNDARY_RADIUS_M:
+			# The ship centre may get this close before the hull reaches the boundary.
+			var limit := maxf(BOUNDARY_RADIUS_M - radius_m(b.ship_type), 0.0)
+			if b.pos.distance_to(CENTRE_M) <= limit:
 				continue
 			if i == 0:
 				deaths[pilot] = {"t": b.t - start_time, "pos": b.pos}
 			else:
 				var a: Dictionary = track[i - 1]
-				var w := _boundary_crossing(a.pos, b.pos)
+				var w := _boundary_crossing(a.pos, b.pos, limit)
 				deaths[pilot] = {"t": lerpf(a.t, b.t, w) - start_time, "pos": a.pos.lerp(b.pos, w)}
 			break
 
 
-## Fraction w in [0, 1] along a->b (a inside, b outside) where the segment hits the boundary.
-static func _boundary_crossing(a: Vector3, b: Vector3) -> float:
+## Fraction w in [0, 1] along a->b (a inside, b outside) where the segment hits the sphere of
+## radius `r` around the centre.
+static func _boundary_crossing(a: Vector3, b: Vector3, r: float) -> float:
 	# Solve |a - c + w (b - a)|^2 = R^2 for w.
 	var d := b - a
 	var f := a - CENTRE_M
 	var qa := d.dot(d)
 	var qb := 2.0 * f.dot(d)
-	var qc := f.dot(f) - BOUNDARY_RADIUS_M * BOUNDARY_RADIUS_M
+	var qc := f.dot(f) - r * r
 	if qa == 0.0:
 		return 1.0
 	return clampf((-qb + sqrt(maxf(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa), 0.0, 1.0)
