@@ -32,6 +32,19 @@ You can also load a CSV with the **Open CSV…** button, or by dropping the file
 Controls: Space plays/pauses, ←/→ seek 10 s, the slider scrubs. Left/right drag orbits the camera,
 the wheel zooms, and middle drag pans.
 
+### Tests
+
+`simulator/tests/` holds a headless, dependency-free test suite (CSV loading, team assignment,
+boundary deaths, interpolation, SDE cache/zip parsing, settings, camera, and playback in
+`main.gd`). Each `test_*.gd` extends `tests/test_case.gd`; every `test_*` method is a test.
+
+```sh
+scripts/test.sh               # all tests (uses $GODOT or `godot` on PATH)
+scripts/test.sh match_data    # only test files whose name contains "match_data"
+```
+
+`.github/workflows/test.yml` runs these and `cargo test` on every push and pull request.
+
 ## Building releases
 
 `scripts/build.sh [linux|windows|all]` builds the simulator (Godot export) and `scrim-positions`

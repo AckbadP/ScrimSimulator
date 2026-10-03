@@ -138,12 +138,16 @@ func full_download() -> void:
 
 ## Runs on `_thread`: pulls ship groups and ship types out of the SDE zip.
 func _parse_zip(path: String) -> void:
+	_finish_parse.call_deferred(_extract_ships(path))
+
+
+## Returns { error, groups, ships, build, release_date } read from the SDE zip at `path`.
+static func _extract_ships(path: String) -> Dictionary:
 	var out := {"error": ""}
 	var zip := ZIPReader.new()
 	if zip.open(path) != OK:
 		out.error = "Cannot open %s" % path
-		_finish_parse.call_deferred(out)
-		return
+		return out
 
 	var meta := _parse_jsonl(zip.read_file("_sde.jsonl").get_string_from_utf8())
 	var groups := {}
@@ -186,7 +190,7 @@ func _parse_zip(path: String) -> void:
 			out.release_date = str(m.get("releaseDate", ""))
 	if found.is_empty() or out.build == 0:
 		out.error = "SDE zip has no ship types"
-	_finish_parse.call_deferred(out)
+	return out
 
 
 func _finish_parse(out: Dictionary) -> void:
