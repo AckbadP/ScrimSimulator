@@ -1,5 +1,6 @@
 /target
 *.mkv
+/.claude
 
 # Godot 4 (simulator/)
 simulator/.godot/
