@@ -11,3 +11,7 @@ resouces/matches/
 
 # EVE Static Data Export cache, downloaded by the simulator on first run
 simulator/sde/
+
+# Build output (scripts/build.sh)
+/dist/
+/.cache/

@@ -28,3 +28,17 @@ godot --path simulator -- --csv /abs/path/to/match_03.positions.csv
 You can also load a CSV with the **Open CSV…** button, or by dropping the file onto the window.
 Controls: Space plays/pauses, ←/→ seek 10 s, the slider scrubs. Left/right drag orbits the camera,
 the wheel zooms, and middle drag pans.
+
+## Building releases
+
+`scripts/build.sh [linux|windows|all]` builds the simulator (Godot export) and `scrim-positions`
+and zips each platform into `dist/`. It runs on Ubuntu; the Windows build is cross-compiled and
+needs `sudo apt install mingw-w64`. Godot 4.6 and its export templates are downloaded on first
+run if missing (set `$GODOT` to use a specific binary).
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds both platforms and attaches
+the zips to a GitHub Release:
+
+```sh
+git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0
+```
