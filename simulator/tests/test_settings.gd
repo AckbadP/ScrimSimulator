@@ -32,3 +32,7 @@ func test_set_value_persists() -> void:
 
 func test_ship_models_default_on() -> void:
 	assert_eq(Settings.get_value("display/ship_models"), true)
+
+
+func test_smooth_motion_default_on() -> void:
+	assert_eq(Settings.get_value("display/smooth_motion"), true)
