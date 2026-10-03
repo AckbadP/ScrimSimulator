@@ -4,6 +4,7 @@
 
 ## Position pipeline (crates)
 - may bug when ship comes close enough that distance becomes m instead of km
+- output exact eve time of each tick so it can be more easilly synced with other data
 
 ## Test data (resouces)
 
@@ -26,4 +27,4 @@
 - selectable resolution
 - Measure tool to check distance between any two points
 - ability to asign shapes to ships or points (ie 30km shpear around ashimu) that can be color coded
-- anonomyzed example match I can publish
+- anonomyzed example match I can publish and use for testing
