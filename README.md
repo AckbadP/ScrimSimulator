@@ -114,6 +114,18 @@ as the match data; it then plays in sync with the replay, at any playback speed.
 **Menu** returns
 to the list.
 
+Matches can be sorted into folders, nested as deep as you like. **New folder…** makes one (inside
+the selected folder, if any); move a match or folder by dragging it onto another folder (or onto
+empty space for the top level), or with **Move to** on its right-click menu. Rename and remove
+work on folders too; removing a folder deletes the matches in it.
+
+**Add folder…** (or dropping a folder onto the window) adds a whole scrim at once: every
+`*.csv` in the folder becomes a match in a library folder of the same name. Audio files in it are
+paired with matches by name — `match_03.positions.csv` with `match_03.mp3` — or, failing that, by
+the number the names end in, so `clip_001.positions.csv` pairs with ScrimTrimmer's
+`match_001.mp3`. Gamelogs (`*.txt`) in it are tried against every match, each keeping only the
+combat during it (see below). Adding the same folder again changes nothing.
+
 Right-click a match → **Add combat logs…** to attach EVE gamelogs
 (`Documents/EVE/logs/Gamelogs/*.txt`), one per pilot whose combat you have. Each log is matched to
 the pilot whose name is its listener's (allowing for names the overview cut short) and lined up

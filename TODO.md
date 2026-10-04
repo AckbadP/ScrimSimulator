@@ -6,6 +6,7 @@
 - may bug when ship comes close enough that distance becomes m instead of km
 - bug where some ships seem to be moved out of bounds erroneously
 - gpu acceleration
+- pipelone should also extract audio at same time and save it with match data for uploade using scrimTrimmer audio extraction option
 
 ## Test data (resouces)
 
@@ -24,5 +25,4 @@
 - add some basic .gifs for the README
 - shift + arrow keys to seek forward or back 10s
 - option to hide dead ships (or just movement of dead pilots)
-- upload folders per scrim with data paired via names for match and audio, folders for library of scrims
 - user should be able to upload a combat log and select a match or folder it is associated with. The data gets parsed and saved to the library, discarding any data that dosen't fall within a match
