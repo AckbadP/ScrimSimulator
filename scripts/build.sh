@@ -93,7 +93,7 @@ Source: https://github.com/AckbadP/ScrimSimulator
 EOF
 }
 
-write_ocr_readme() { # <dir> <ocr exe>
+write_ocr_readme() { # <dir> <ocr exe> <gui exe>
     cat > "$1/README.txt" <<EOF
 Scrim Positions ${VERSION}
 
@@ -103,6 +103,11 @@ $2
     scene.json matches the OBS template in the source repository (docs/obs/); adjust its
     panel rectangles if your layout differs. Requires ffmpeg and ffprobe on PATH.
     Watch the result in the separate scrim-simulator download.
+
+$3
+    A window for running $2 on one recording: pick the video, chat log, output folder,
+    optional combat logs folder and whether to save the audio. Remembers your choices.
+    Keep it next to $2.
 
 Source: https://github.com/AckbadP/ScrimSimulator
 EOF
@@ -135,22 +140,22 @@ package_simulator() { # <platform> <sim exe path> <undraco exe path>
     zip_stage "$name"
 }
 
-package_ocr() { # <platform> <ocr exe path>
+package_ocr() { # <platform> <ocr exe path> <gui exe path>
     local name="scrim-positions-${VERSION}-$1-x86_64"
     local stage="$DIST/$name"
     new_stage "$name"
-    cp "$2" docs/obs/scene.json "$stage/"
-    write_ocr_readme "$stage" "$(basename "$2")"
+    cp "$2" "$3" docs/obs/scene.json "$stage/"
+    write_ocr_readme "$stage" "$(basename "$2")" "$(basename "$3")"
     zip_stage "$name"
 }
 
 build_linux() {
     log "building scrim-positions (linux)"
-    cargo build --release -p overview --bin scrim-positions -p glb-undraco --bin glb-undraco
+    cargo build --release -p overview --bin scrim-positions -p positions-gui -p glb-undraco --bin glb-undraco
     log "exporting simulator (linux)"
     export_simulator "Linux" "export/linux/scrim-simulator.x86_64"
     package_simulator linux simulator/export/linux/scrim-simulator.x86_64 target/release/glb-undraco
-    package_ocr linux target/release/scrim-positions
+    package_ocr linux target/release/scrim-positions target/release/scrim-positions-gui
 }
 
 build_windows() {
@@ -162,11 +167,11 @@ build_windows() {
         rustup target add "$WIN_TARGET"
     fi
     log "building scrim-positions (windows)"
-    cargo build --release -p overview --bin scrim-positions -p glb-undraco --bin glb-undraco --target "$WIN_TARGET"
+    cargo build --release -p overview --bin scrim-positions -p positions-gui -p glb-undraco --bin glb-undraco --target "$WIN_TARGET"
     log "exporting simulator (windows)"
     export_simulator "Windows Desktop" "export/windows/scrim-simulator.exe"
     package_simulator windows simulator/export/windows/scrim-simulator.exe "target/$WIN_TARGET/release/glb-undraco.exe"
-    package_ocr windows "target/$WIN_TARGET/release/scrim-positions.exe"
+    package_ocr windows "target/$WIN_TARGET/release/scrim-positions.exe" "target/$WIN_TARGET/release/scrim-positions-gui.exe"
 }
 
 ensure_godot

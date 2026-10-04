@@ -2,7 +2,7 @@
 - may bug when ship comes close enough that distance becomes m instead of km
 - bug where some ships seem to be moved out of bounds erroneously
 - gpu acceleration
-- pipeline should also extract audio at same time and save it with match data for uploade using scrimTrimmer audio extraction option
+- update to record hp changes via locked targets
 
 ## Test data (resouces)
 
@@ -20,3 +20,5 @@
 - when a ship dies it should show just a bar for the speed and distance rather than the true distance
 - shift + arrow keys to seek forward or back 10s
 - option to hide dead ships (or just movement of dead pilots)
+- timeline shoulden't care about being podded, just ships dying
+add bars for armor, shield, and hull
