@@ -87,8 +87,8 @@ func test_load() -> void:
 	var d := _load()
 	assert_not_null(d)
 	assert_eq(d.tracks.size(), PILOTS)
-	assert_eq(d.start_time, 0.0)
-	assert_eq(d.duration, 585.0)
+	assert_eq(d.start_time, 11.0, "countdown skipped: first ship moves at t=12")
+	assert_eq(d.duration, 574.0)
 	var samples := 0
 	for pilot in d.tracks:
 		samples += d.tracks[pilot].size()
@@ -123,9 +123,9 @@ func test_deaths() -> void:
 	var dead := d.deaths.keys()
 	dead.sort()
 	assert_eq(dead, ["Amarr Citizen 5054432", "Caldari Citizen 8777524", "Caldari Citizen 9942864"])
-	assert_almost(d.deaths["Amarr Citizen 5054432"].t, 232.571, 1e-2)
-	assert_almost(d.deaths["Caldari Citizen 9942864"].t, 340.827, 1e-2)
-	assert_almost(d.deaths["Caldari Citizen 8777524"].t, 429.890, 1e-2)
+	assert_almost(d.deaths["Amarr Citizen 5054432"].t, 221.571, 1e-2)
+	assert_almost(d.deaths["Caldari Citizen 9942864"].t, 329.827, 1e-2)
+	assert_almost(d.deaths["Caldari Citizen 8777524"].t, 418.890, 1e-2)
 	assert_eq(_ship_at(d, "Amarr Citizen 5054432", d.deaths["Amarr Citizen 5054432"].t), "Prospect")
 	assert_eq(_ship_at(d, "Caldari Citizen 9942864", d.deaths["Caldari Citizen 9942864"].t), "Capsule")
 
@@ -161,20 +161,30 @@ func test_ship_change_to_capsule() -> void:
 	assert_eq(track[-1].ship_type, "Capsule")
 
 
+func test_events() -> void:
+	var d := _load()
+	var count := {}
+	for e in d.events:
+		count[e.kind] = count.get(e.kind, 0) + 1
+	assert_eq(count.get(MatchData.Event.DEATH, 0), 11, "pilots podded")
+	assert_eq(count.get(MatchData.Event.BOUNDARY, 0), d.deaths.size())
+	assert_eq(count.get(MatchData.Event.MJD, 0), 0, "pod warps aren't MJDs")
+
+
 func test_sample() -> void:
 	var d := _load()
 	var pilot := "Amarr Citizen 0220922"
-	var s := d.sample(pilot, 100.0)
+	var s := d.sample(pilot, 89.0)
 	assert_eq(s.ship_type, "Porpoise")
 	assert_almost(s.pos, Vector3(40775, 57520, 68065))
 
-	var a := d.sample(pilot, 100.0)
-	var b := d.sample(pilot, 101.0)
-	var mid := d.sample(pilot, 100.5)
+	var a := d.sample(pilot, 89.0)
+	var b := d.sample(pilot, 90.0)
+	var mid := d.sample(pilot, 89.5)
 	assert_almost(mid.pos, a.pos.lerp(b.pos, 0.5))
 
-	assert_eq(d.sample(pilot, -1.0), {}, "before the match")
-	assert_eq(d.sample(pilot, 586.0), {}, "after the match")
+	assert_eq(d.sample(pilot, -d.start_time - 1.0), {}, "before the recording")
+	assert_eq(d.sample(pilot, 575.0), {}, "after the match")
 
 
 # --- main.gd -----------------------------------------------------------------
@@ -196,7 +206,7 @@ func test_viewer_loads_demo() -> void:
 	var m := _viewer()
 	assert_not_null(m.data)
 	assert_eq(m.ships.size(), PILOTS)
-	assert_eq(m.timeline.max_value, 585.0)
+	assert_eq(m.timeline.max_value, 574.0)
 	assert_eq(m.file_label.text,
 		"match_03.positions.csv — 20 pilots (blue 10 / red 9 / unknown 1), 3 out of bounds")
 
@@ -206,5 +216,5 @@ func test_viewer_plays_through() -> void:
 	m.speed = 10.0
 	for i in 60:
 		m._process(1.0)
-	assert_eq(m.time, 585.0)
+	assert_eq(m.time, 574.0)
 	assert_false(m.playing)

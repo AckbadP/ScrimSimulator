@@ -56,6 +56,15 @@ func test_fmt_time() -> void:
 	assert_eq(Main._fmt_time(3600.0), "60:00")
 
 
+func test_fmt_speed() -> void:
+	assert_eq(Main._fmt_speed(0.0), "0 m/s")
+	assert_eq(Main._fmt_speed(999.0), "999 m/s")
+	assert_eq(Main._fmt_speed(999.4), "999 m/s")
+	assert_eq(Main._fmt_speed(999.5), "1.0 km/s")
+	assert_eq(Main._fmt_speed(1000.0), "1.0 km/s")
+	assert_eq(Main._fmt_speed(2450.0), "2.5 km/s")
+
+
 func test_material() -> void:
 	var m := Main._material(Color(1, 0, 0, 0.5), false)
 	assert_eq(m.transparency, BaseMaterial3D.TRANSPARENCY_ALPHA)
@@ -183,6 +192,85 @@ func _roster(m: Main) -> Array:
 	return out
 
 
+## "hopper" micro jumps at 3 s and gets podded at 6 s.
+func _events_csv() -> String:
+	var rows := [
+		row(0, "hopper", "Test Hull", C),
+		row(1, "hopper", "Test Hull", C + X * 1000),
+		row(2, "hopper", "Test Hull", C + X * 2000),
+		row(3, "hopper", "Test Hull", C + X * 102000),
+		row(4, "hopper", "Test Hull", C + X * 103000),
+		row(5, "hopper", "Test Hull", C + X * 104000),
+		row(6, "hopper", "Capsule", C + X * 105000),
+		row(10, "hopper", "Capsule", C + X * 105000),
+	]
+	return write_csv(rows)
+
+
+func test_events_on_timeline() -> void:
+	var m := _main()
+	m.load_match(_events_csv())
+	var marks: Array = m.event_strip.marks
+	assert_eq(marks.size(), 2)
+	assert_eq(marks[0].t, 3.0)
+	assert_eq(marks[0].color, Main.EVENT_COLORS[MatchData.Event.MJD])
+	assert_eq(marks[0].text, "00:03 hopper — MJD 100 km (Test Hull)")
+	assert_eq(marks[1].text, "00:06 hopper — Podded (Test Hull)")
+	m.load_match(_match_csv())
+	assert_eq(m.event_strip.marks.size(), 1, "reload replaces marks (runner leaves the arena)")
+
+
+func test_click_event_mark_seeks_before_it() -> void:
+	var m := _main()
+	m.load_match(_events_csv())
+	m.event_strip.size = Vector2(1000, 12)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	ev.position = Vector2(m.event_strip.x_of(6.0), 6)
+	m.event_strip._gui_input(ev)
+	assert_almost(m.time, 6.0 - Main.EVENT_LEAD_S)
+	assert_eq(m.event_strip.mark_at(m.event_strip.x_of(4.5)), -1, "nothing between ticks")
+
+
+func test_bracket_keys_jump_between_events() -> void:
+	var m := _main()
+	m.load_match(_events_csv())
+	var key := func(code):
+		var ev := InputEventKey.new()
+		ev.keycode = code
+		ev.pressed = true
+		m._unhandled_input(ev)
+	key.call(KEY_BRACKETRIGHT)
+	assert_almost(m.time, 1.0)
+	key.call(KEY_BRACKETRIGHT)
+	assert_almost(m.time, 4.0)
+	key.call(KEY_BRACKETRIGHT)
+	assert_almost(m.time, 4.0, 1e-3, "no event after the last")
+	key.call(KEY_BRACKETLEFT)
+	assert_almost(m.time, 1.0)
+
+
+func test_mjd_trail_shows_briefly_after_jump() -> void:
+	var m := _main()
+	m.load_match(_events_csv())
+	assert_eq(m.mjd_trails.size(), 1)
+	var trail: Node3D = m.mjd_trails[0].node
+	for case in [[2.5, false], [3.0, true], [7.0, true], [8.5, false]]:
+		m._seek(case[0])
+		m._process(0.0)
+		assert_eq(trail.visible, case[1], "at %s s" % case[0])
+
+
+func test_info_shows_podding() -> void:
+	var m := _main()
+	m.load_match(_events_csv())
+	m._select("hopper")
+	m._seek(7.0)
+	m._update_info()
+	assert_true("Podded at 00:06 (lost Test Hull)" in m.info_label.text)
+
+
 func test_short_name() -> void:
 	assert_eq(Main._short_name("Ackbad"), "Ackbad")
 	assert_eq(Main._short_name("Amarr Citizen 0220922"), "Amarr C. 0.")
@@ -226,7 +314,7 @@ func test_roster_shows_speed_and_distance() -> void:
 	m._seek(2.0)
 	m._process(0.0)
 	var motion := m._motion("blue")
-	assert_eq(m.roster_table.cell_text("blue", "speed"), "%.0f m/s" % motion.speed)
+	assert_eq(m.roster_table.cell_text("blue", "speed"), "0 m/s", "the CSV's speed, though blue moves")
 	assert_eq(m.roster_table.cell_text("blue", "distance"), "%.1f km" % motion.dist_km)
 	assert_eq(m.roster_table.cell_text("late", "speed"), "—", "late isn't on grid yet")
 	assert_eq(m.roster_table.cell_text("late", "distance"), "—")
@@ -599,6 +687,27 @@ func _turning_ship(m: Main) -> Dictionary:
 
 func _nose(ship: Dictionary) -> Vector3:
 	return ship.visual.basis.z.normalized()
+
+
+func test_jitter_setting_moves_match_start() -> void:
+	var m := _main()
+	m.load_match(write_csv([
+		row(0, "a", "Rifter", C),
+		row(2, "a", "Rifter", C + X * 100),
+		row(4, "a", "Rifter", C + X * 2000),
+		row(6, "a", "Rifter", C + X * 4000),
+	]))
+	assert_false(m.jitter_setting.button_pressed, "off by default")
+	assert_false(m.jitter_spin.editable)
+	assert_eq(m.data.start_time, 0.0, "any movement starts the match")
+	m.jitter_setting.button_pressed = true
+	assert_true(Settings.get_value("match/ignore_jitter"))
+	assert_true(m.jitter_spin.editable)
+	assert_eq(m.data.start_time, 2.0, "reloaded: 100 m drift is jitter")
+	assert_eq(m.timeline.max_value, 4.0)
+	m.jitter_spin.value = 3000.0
+	assert_eq(Settings.get_value("match/jitter_threshold_m"), 3000.0)
+	assert_eq(m.data.start_time, 4.0)
 
 
 func test_smooth_heading_turns_gradually() -> void:

@@ -8,6 +8,9 @@ const DEFAULTS := {
 	"sde/auto_update": true,
 	"display/ship_models": true,
 	"display/smooth_motion": true,
+	# Match start detection: ignore position changes up to this many metres (overview jitter).
+	"match/ignore_jitter": false,
+	"match/jitter_threshold_m": 500.0,
 	# Roster column layout (see `RosterTable`); empty = default columns.
 	"roster/columns": [],
 }
