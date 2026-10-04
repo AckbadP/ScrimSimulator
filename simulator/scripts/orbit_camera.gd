@@ -1,6 +1,6 @@
 extends Camera3D
 ## Orbit camera: left drag rotates, wheel zooms, right drag pans. (Left clicks that
-## don't drag select ships; `main.gd` handles those.)
+## don't drag select ships, and left drags that start on a ship measure; `main.gd` handles those.)
 
 ## Right-drag pan: the user moved the target by hand.
 signal panned
@@ -9,6 +9,8 @@ signal panned
 @export var distance := 320.0
 @export var yaw := deg_to_rad(35.0)
 @export var pitch := deg_to_rad(25.0)
+## Set by `main.gd` while a left drag measures from a ship: left drags don't rotate.
+var rotate_locked := false
 
 const ROTATE_SPEED := 0.006
 const ZOOM_STEP := 1.12
@@ -50,6 +52,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion:
 		var m: int = event.button_mask
 		if m & MOUSE_BUTTON_MASK_LEFT:
+			if rotate_locked:
+				return
 			yaw -= event.relative.x * ROTATE_SPEED
 			pitch = clampf(pitch + event.relative.y * ROTATE_SPEED, -1.55, 1.55)
 			_update_transform()

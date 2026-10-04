@@ -48,6 +48,10 @@ const CLICK_SLOP_PX := 4.0
 ## The selection bracket is this many times the size of the overview icon.
 const SELECT_SCALE := 1.8
 const SELECT_COLOR := Color(1, 1, 1, 0.9)
+## Left drag from a ship: a range sphere around it; ships it reaches get a bracket this many
+## times the overview icon (outside the selection bracket).
+const MEASURE_COLOR := Color(0.4, 1.0, 0.6)
+const MEASURE_SCALE := 2.4
 ## Ship/death label `pixel_size` per screen pixel spanned at 1 unit from the camera (0.0008 at the
 ## default 75° FOV and 648 px viewport), so labels keep their on-screen size.
 const LABEL_PX := 0.338
@@ -175,6 +179,15 @@ var roster_buttons := {}
 var _scrubbing := false
 var _press_pos := Vector2.INF
 var _right_press_pos := Vector2.INF
+## Pilot a left press landed on (its drag measures from it; "" = none), whether the drag has gone
+## past `CLICK_SLOP_PX`, and where the cursor is.
+var _measure_from := ""
+var _measuring := false
+var _measure_mouse := Vector2.ZERO
+## Measuring sphere (unit radius, scaled), line to the cursor or snapped ship, and its label.
+var measure_root: Node3D
+var measure_line: MeshInstance3D
+var measure_label: Label3D
 ## `_units_per_px(1.0)` that the fixed-size icons and labels are currently sized for.
 var _overlay_unit := 0.0
 
@@ -201,6 +214,7 @@ func _ready() -> void:
 	_build_boundary()
 	ships_root = Node3D.new()
 	add_child(ships_root)
+	_build_measure()
 	_build_audio()
 	_build_ui()
 	get_window().files_dropped.connect(_on_files_dropped)
@@ -257,6 +271,7 @@ func load_match(path: String) -> bool:
 	match_path = path
 	audio_player.stop()
 	audio_player.stream = MatchLibrary.load_audio(path) if has_audio else null
+	_end_measure()
 	for c in ships_root.get_children():
 		c.queue_free()
 	ships.clear()
@@ -460,6 +475,7 @@ func _process(delta: float) -> void:
 	_update_mjd_trails()
 	if tracked != "" and ships[tracked].node.visible:
 		camera.set_target(ships[tracked].node.position)
+	_update_measure()
 	if not _scrubbing:
 		timeline.set_value_no_signal(time)
 	_update_info()
@@ -475,6 +491,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		_on_right_click(event)
+		return
+	if event is InputEventMouseMotion:
+		_on_mouse_motion(event)
 		return
 	if not (event is InputEventKey and event.pressed):
 		return
@@ -532,6 +551,9 @@ func _add_ship(pilot: String) -> void:
 	var select_icon := _icon()
 	node.add_child(select_icon)
 
+	var measure_icon := _icon()
+	node.add_child(measure_icon)
+
 	var label := _label(color)
 	node.add_child(label)
 
@@ -547,7 +569,8 @@ func _add_ship(pilot: String) -> void:
 	node.visible = false
 	ships_root.add_child(node)
 	ships[pilot] = {
-		"node": node, "visual": visual, "model_id": 0, "icon": icon, "select_icon": select_icon, "label": label,
+		"node": node, "visual": visual, "model_id": 0, "icon": icon, "select_icon": select_icon,
+		"measure_icon": measure_icon, "label": label,
 		"ship_type": "", "radius": 0.0, "dead": false, "color": color, "tint": color,
 		"death_t": INF, "death_marker": null, "heading": Quaternion.IDENTITY, "heading_t": -INF,
 		"vector": vector, "vector_tip": Vector3.ZERO, "spheres": spheres,
@@ -830,9 +853,11 @@ func _icon_clearance(node: Node3D) -> float:
 # --- selection ---------------------------------------------------------------
 
 ## Left click selects the ship under the cursor (empty space clears it); a double click also
-## follows it. A press that turns into a camera drag selects nothing.
+## follows it. A press on a ship that turns into a drag measures from it (see `_update_measure`);
+## one on empty space drags the camera. Neither selects anything.
 func _on_left_click(event: InputEventMouseButton) -> void:
 	if event.pressed:
+		_end_measure()
 		_press_pos = event.position
 		if event.double_click:
 			# The camera jumps to the ship, so the release would miss it: ignore that release.
@@ -841,19 +866,36 @@ func _on_left_click(event: InputEventMouseButton) -> void:
 			if pilot != "":
 				_select(pilot)
 				_follow(pilot)
+			return
+		_measure_from = _pick_ship(event.position)
+		_measure_mouse = event.position
+		camera.rotate_locked = _measure_from != ""
 		return
-	if event.position.distance_to(_press_pos) <= CLICK_SLOP_PX:
+	if not _measuring and event.position.distance_to(_press_pos) <= CLICK_SLOP_PX:
 		_select(_pick_ship(event.position))
 	_press_pos = Vector2.INF
+	_end_measure()
 
 
-## The visible ship drawn nearest `screen_pos` within `PICK_PX` (or its on-screen hull), or "".
-func _pick_ship(screen_pos: Vector2) -> String:
+## A left drag that started on a ship measures once it passes `CLICK_SLOP_PX`.
+func _on_mouse_motion(event: InputEventMouseMotion) -> void:
+	if _measure_from == "":
+		return
+	_measure_mouse = event.position
+	if not _measuring and event.position.distance_to(_press_pos) > CLICK_SLOP_PX:
+		_measuring = true
+	if _measuring:
+		_update_measure()
+
+
+## The visible ship drawn nearest `screen_pos` within `PICK_PX` (or its on-screen hull), or "";
+## never `exclude`.
+func _pick_ship(screen_pos: Vector2, exclude := "") -> String:
 	var best := ""
 	var best_d := INF
 	for pilot in ships:
 		var node: Node3D = ships[pilot].node
-		if not node.visible or camera.is_position_behind(node.global_position):
+		if pilot == exclude or not node.visible or camera.is_position_behind(node.global_position):
 			continue
 		var d := camera.unproject_position(node.global_position).distance_to(screen_pos)
 		var dist := camera.global_position.distance_to(node.global_position)
@@ -966,6 +1008,109 @@ func _motion(pilot: String) -> Dictionary:
 		"speed": now.speed,
 		"dist_km": now.pos.distance_to(MatchData.CENTRE_M) * M_TO_UNITS,
 	}
+
+
+# --- measuring ---------------------------------------------------------------
+
+func _build_measure() -> void:
+	measure_root = Node3D.new()
+	measure_root.visible = false
+	add_child(measure_root)
+	measure_root.add_child(_range_sphere(1.0, MEASURE_COLOR, 0.35, 48, 6, 3))
+	measure_line = MeshInstance3D.new()
+	measure_line.mesh = ImmediateMesh.new()
+	measure_line.material_override = vector_material
+	measure_line.visible = false
+	add_child(measure_line)
+	measure_label = _label(MEASURE_COLOR)
+	measure_label.visible = false
+	add_child(measure_label)
+
+
+## Stops measuring: hides the sphere, line, label and brackets and gives the camera back its drag.
+func _end_measure() -> void:
+	_measure_from = ""
+	_measuring = false
+	if camera:
+		camera.rotate_locked = false
+	if measure_root == null:
+		return
+	measure_root.visible = false
+	measure_line.visible = false
+	measure_label.visible = false
+	for pilot in ships:
+		ships[pilot].measure_icon.visible = false
+
+
+## Redraws the measuring sphere around `_measure_from`. Its radius reaches the cursor (on the
+## plane through the ship facing the camera), or, with the cursor on another ship, that ship's
+## near hull, labelled with the hull-to-hull gap. Ships whose hulls it reaches are bracketed.
+func _update_measure() -> void:
+	if not _measuring:
+		return
+	if not ships.has(_measure_from) or not ships[_measure_from].node.visible:
+		_end_measure()
+		return
+	var from: Dictionary = ships[_measure_from]
+	var o: Vector3 = from.node.position
+	var radius: float = measure_root.scale.x if measure_root.visible else 0.0
+	var a := o
+	var b := o
+	var text := ""
+	var snap := _pick_ship(_measure_mouse, _measure_from)
+	if snap != "":
+		var to: Dictionary = ships[snap]
+		var t: Vector3 = to.node.position
+		var d := o.distance_to(t)
+		var dir := (t - o).normalized()
+		radius = maxf(d - to.radius, 0.0)
+		a = o + dir * minf(from.radius, d)
+		b = o + dir * radius
+		text = "%s\nr %s" % [_fmt_km_m(maxf(d - from.radius - to.radius, 0.0)), _fmt_km_m(radius)]
+	else:
+		var hit: Variant = Plane(camera.global_basis.z, o).intersects_ray(
+			camera.project_ray_origin(_measure_mouse), camera.project_ray_normal(_measure_mouse))
+		if hit != null:
+			radius = o.distance_to(hit)
+		b = o + ((hit - o).normalized() if hit != null and radius > 0.0 else Vector3.ZERO) * radius
+		text = "r %s" % _fmt_km_m(radius)
+	measure_root.position = o
+	measure_root.scale = Vector3.ONE * maxf(radius, 1e-4)
+	measure_root.visible = true
+	var lines: ImmediateMesh = measure_line.mesh
+	lines.clear_surfaces()
+	if a != b:
+		lines.surface_begin(Mesh.PRIMITIVE_LINES)
+		lines.surface_set_color(MEASURE_COLOR)
+		lines.surface_add_vertex(a)
+		lines.surface_add_vertex(b)
+		lines.surface_end()
+	measure_line.visible = true
+	measure_label.text = text
+	measure_label.position = (a + b) / 2.0 if snap != "" else b
+	measure_label.visible = true
+	for pilot in ships:
+		var ship: Dictionary = ships[pilot]
+		var inside: bool = pilot != _measure_from and ship.node.visible \
+			and _in_sphere(o.distance_to(ship.node.position), ship.radius, radius)
+		if inside != ship.measure_icon.visible:
+			_set_icon(ship.measure_icon, _select_texture() if inside else null, MEASURE_COLOR)
+			if inside:
+				ship.measure_icon.pixel_size *= MEASURE_SCALE
+
+
+## Whether a hull of radius `ship_r` whose centre is `dist` from a sphere's centre reaches into a
+## sphere of `radius` (touching counts).
+static func _in_sphere(dist: float, ship_r: float, radius: float) -> bool:
+	return dist - ship_r <= radius + 1e-6
+
+
+## A distance in scene units (km) to the metre: "12.345 km", or "850 m" under 1 km.
+static func _fmt_km_m(km: float) -> String:
+	var m := roundi(km * 1000.0)
+	if m < 1000:
+		return "%d m" % m
+	return "%d.%03d km" % [m / 1000, m % 1000]
 
 
 # --- debug overlays ----------------------------------------------------------

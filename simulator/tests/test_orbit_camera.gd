@@ -73,6 +73,19 @@ func test_drag_rotates_and_clamps_pitch() -> void:
 	_assert_orbiting(cam)
 
 
+func test_rotate_locked_ignores_left_drag() -> void:
+	var cam := _camera()
+	var yaw: float = cam.yaw
+	var pitch: float = cam.pitch
+	cam.rotate_locked = true
+	_drag(cam, Vector2(100, 50), MOUSE_BUTTON_MASK_LEFT)
+	assert_eq(cam.yaw, yaw)
+	assert_eq(cam.pitch, pitch)
+	var target: Vector3 = cam.target
+	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_RIGHT)
+	assert_ne(cam.target, target, "right drag still pans")
+
+
 func test_right_drag_pans_target() -> void:
 	var cam := _camera()
 	var target: Vector3 = cam.target
