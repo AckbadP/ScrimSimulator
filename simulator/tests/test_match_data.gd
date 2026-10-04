@@ -49,6 +49,26 @@ func test_load_sorts_samples_and_sets_time_range() -> void:
 	assert_eq(d.duration, 2.0)
 
 
+func test_load_reads_eve_times() -> void:
+	var header := DEFAULT_HEADER + ",eve_time"
+	var path := write_csv([
+		row(1, "A", "Rifter", C) + ["2026-04-05T00:00:00.000Z"],
+		row(0, "A", "Rifter", C) + ["2026-04-04T23:59:59.000Z"],
+		row(2, "B", "Merlin", C) + ["2026-04-05T00:00:01.000Z"],
+	], header)
+	var d := MatchData.load_csv(path)
+	assert_eq(d.eve_start, "2026-04-04T23:59:59.000Z")
+	assert_eq(d.eve_end, "2026-04-05T00:00:01.000Z")
+	assert_eq(d.tracks["A"][1].eve_time, "2026-04-05T00:00:00.000Z")
+
+
+func test_load_without_eve_times() -> void:
+	var d := _load([row(0, "A", "Rifter", C)])
+	assert_eq(d.eve_start, "")
+	assert_eq(d.eve_end, "")
+	assert_false(d.tracks["A"][0].has("eve_time"))
+
+
 func test_load_skips_countdown_before_first_move() -> void:
 	var d := _load([
 		row(0, "A", "Rifter", C),

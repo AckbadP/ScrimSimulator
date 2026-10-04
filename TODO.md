@@ -4,9 +4,8 @@
 
 ## Position pipeline (crates)
 - may bug when ship comes close enough that distance becomes m instead of km
-- output exact eve time of each tick so it can be more easily synced with other data
 - bug where some ships seem to be moved out of bounds erroneously
-- I should be able to give this a video file and log file get the data I need. It can use the scrimTrimmer do the truncation, but this proccess should preserve the eve timestamps of every tic so it can be synced with other log files later
+- gpu acceleration
 
 ## Test data (resouces)
 
@@ -25,3 +24,5 @@
 - when a ship dies it should show just a bar for the speed and distance rather than the true distance
 - add some basic .gifs for the README
 - shift + arrow keys to seek forward or back 10s
+- option to hide dead ships (or just movement of dead pilots)
+- upload folders per scrim with data paired via names for match and audio, folders for library of scrims

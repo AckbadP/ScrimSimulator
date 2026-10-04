@@ -60,6 +60,38 @@ your layout differs.
 The CSV has one row per pilot per second:
 `t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m`.
 
+### One match, with EVE timestamps
+
+Give it the observer's Local chat log as well, and it processes just the match and stamps every
+row with its EVE time:
+
+```sh
+scrim-positions --scene docs/obs/scene.json --chat-log Local_20260404_174253_123.txt --out out/ match.mkv
+```
+
+[ScrimTrimmer](https://github.com/AckbadP/ScrimTrimmer) (a submodule in `third_party/`) reads the
+chat window recorded by the OBS template (the scene's `chat` rect), matches it against the log to
+find the EVE time at the start of the video, and finds the match in the log: from `CD` (or a bare
+`10, 9, 8…` countdown) to `WF`/`GF`. Only that window is OCR'd, and the CSV gains an `eve_time`
+column (ISO 8601 UTC, e.g. `2026-04-04T17:43:59.000Z`): the first row is the start of the data, the
+last row the end, and every tick in between can be lined up with combat logs and other EVE logs.
+
+- More than one CD→WF in the video: pick one with `--match N`.
+- `--t0 HH:MM:SS` gives the EVE time at video second 0 yourself, skipping the chat OCR.
+- `--tournament` uses the tournament system messages ("30 seconds until match start",
+  "Match completed!") instead.
+- Without `--chat-log`, `--t0 2026-04-04T17:43:55Z` stamps the whole video with EVE times.
+
+This needs a source checkout (it runs `scripts/scrim_trimmer_bridge.py`), Python 3 and Tesseract:
+
+```sh
+git submodule update --init            # or clone with --recurse-submodules
+sudo apt install tesseract-ocr         # Windows: the UB-Mannheim Tesseract build, on PATH
+pip install -r scripts/requirements-trimmer.txt
+```
+
+Set `$SCRIM_PYTHON` (or `--python`) to use a different interpreter, e.g. a virtualenv's.
+
 ## Using the simulator
 
 ### Match list
@@ -67,7 +99,9 @@ The CSV has one row per pilot per second:
 The main menu lists the matches you have added. **Add match…** adds a `*.positions.csv`, and
 dropping a CSV onto the window adds it and opens it straight away. Select a match and use
 **Rename…**, **Remove** or **Add audio…** (also on its right-click menu). Audio (ogg, mp3 or wav) should start at the same moment
-as the match data. It then plays in sync with the replay, at any playback speed. **Menu** returns
+as the match data; it then plays in sync with the replay, at any playback speed.
+[ScrimTrimmer](https://github.com/AckbadP/ScrimTrimmer) can extract a match's audio for this.
+**Menu** returns
 to the list.
 
 Added matches are copied into the simulator's own library
@@ -121,11 +155,12 @@ SDE/model download controls. Resize the window to see more of the arena.
 | `crates/glyph` | Glyph-template OCR for EVE's UI font |
 | `crates/videoin` | Frame decoding via `ffmpeg` |
 | `crates/overview` | Overview parsing, tracking and trilateration; the `scrim-positions` and `overview-track` binaries |
+| `third_party/ScrimTrimmer` | Submodule: finds a match and its EVE time in a recording + chat log (`--chat-log`) |
 | `crates/glb-undraco` | Converts the model gallery's Draco-compressed GLBs into ones Godot can load |
 | `simulator/` | The Godot replay viewer (`scripts/`, headless tests in `tests/`) |
 | `docs/` | Design document and the OBS template |
 | `resouces/` | Demo match and OCR sample images |
-| `scripts/` | Build, test and README GIF scripts |
+| `scripts/` | Build, test and README GIF scripts; the ScrimTrimmer bridge |
 
 ### Run from source
 
@@ -148,6 +183,7 @@ quit. When running from source, downloaded ship data goes into `simulator/sde/`.
 cargo test --workspace --release   # Rust crates (release: the video OCR test is slow unoptimised)
 scripts/test.sh                    # simulator tests, headless (uses $GODOT or `godot`)
 scripts/test.sh match_data         # only simulator test files whose name contains "match_data"
+python3 -m unittest scripts/test_trimmer_bridge.py   # ScrimTrimmer bridge (needs the submodule)
 ```
 
 Simulator tests live in `simulator/tests/`. Each `test_*.gd` extends `tests/test_case.gd`, and

@@ -1,7 +1,8 @@
 class_name MatchData
 extends RefCounted
 ## Per-pilot position tracks loaded from a `scrim-positions` CSV:
-## `t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m`.
+## `t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m`, plus `eve_time` (each
+## tick's EVE time, ISO 8601 UTC) when it was made with `--chat-log` or `--t0`.
 ## Positions are metres in the observers' cube frame (0..100 km per axis).
 
 ## Samples further apart than this are treated as a gap: the ship is hidden in between.
@@ -29,7 +30,8 @@ enum Event { DEATH, BOUNDARY, MJD }
 
 ## pilot name -> Array of { t: float, pos: Vector3 (metres), ship_type: String, speed: float
 ## (m/s as read from the overview; NAN if the CSV has none) }, sorted by t.
-## A sample its ship micro jumped to also has `mjd: true`.
+## A sample its ship micro jumped to also has `mjd: true`; with an `eve_time` column, every sample
+## has `eve_time: String`.
 var tracks: Dictionary = {}
 ## pilot name -> Team, from each pilot's first position.
 var teams: Dictionary = {}
@@ -48,6 +50,10 @@ var radii: Dictionary = {}
 var start_time := 0.0
 ## Match time of the last sample.
 var duration := 0.0
+## EVE time (ISO 8601 UTC) of the CSV's first and last sample, for lining the match up with other
+## EVE logs; "" when the CSV has no `eve_time` column.
+var eve_start := ""
+var eve_end := ""
 ## Follow a Catmull-Rom spline through the samples instead of straight lines between them.
 var smooth := false
 
@@ -75,6 +81,7 @@ static func load_csv(path: String, ship_radii := {}, move_threshold_m := 0.0, ke
 	var t_min := INF
 	var t_max := -INF
 	var speed_col: int = col.get("speed_mps", -1)
+	var eve_col: int = col.get("eve_time", -1)
 	while not f.eof_reached():
 		var row := f.get_csv_line()
 		if row.size() < header.size():
@@ -90,6 +97,12 @@ static func load_csv(path: String, ship_radii := {}, move_threshold_m := 0.0, ke
 			"ship_type": row[col["ship_type"]],
 			"speed": _parse_speed(row[speed_col]) if speed_col >= 0 else NAN,
 		}
+		if eve_col >= 0:
+			s.eve_time = row[eve_col]
+			if t < t_min:
+				data.eve_start = s.eve_time
+			if t > t_max:
+				data.eve_end = s.eve_time
 		if not data.tracks.has(pilot):
 			data.tracks[pilot] = []
 		data.tracks[pilot].append(s)
