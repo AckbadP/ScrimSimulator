@@ -275,5 +275,3 @@ git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0
 
 - Ship sizes: CCP's Static Data Export. Bracket icons: CCP's Image Export Collection.
 - Hull models: [EstamelGG/EVE_Model_Gallery](https://github.com/EstamelGG/EVE_Model_Gallery).
-- OCR approach inspired by
-  [darkmatter2222/EVE-Online-Bot](https://github.com/darkmatter2222/EVE-Online-Bot).
