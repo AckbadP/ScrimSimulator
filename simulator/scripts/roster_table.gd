@@ -4,7 +4,8 @@ extends VBoxContainer
 ## Drag the grip left of the first column to resize the whole table, drag a grip between columns
 ## to trade width between them, double-click a column's right grip to fit it to its contents,
 ## drag a header to move it, and right-click the header to choose which columns are shown. The
-## layout persists in setting `roster/columns`.
+## layout persists in setting `roster/columns`. Columns can also be made unavailable (no data for
+## them): they are hidden without touching the saved layout.
 
 signal row_pressed(pilot: String)
 signal swap_pressed(pilot: String)
@@ -15,12 +16,21 @@ signal group_activated(key: int)
 ## Column widths, order or visibility changed.
 signal layout_changed
 
-## id -> title, alignment and default width (px), in default display order.
+## id -> title, alignment and default width (px), in default display order. `icons` columns hold
+## a row of icons (`set_cell_icons`) instead of text.
 const COLUMNS := {
 	"ship": {"title": "Ship", "align": HORIZONTAL_ALIGNMENT_LEFT, "width": 110},
 	"pilot": {"title": "Pilot", "align": HORIZONTAL_ALIGNMENT_LEFT, "width": 110},
 	"speed": {"title": "Speed", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 70},
 	"distance": {"title": "Centre", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 70},
+	"dmg_in": {"title": "Dmg in", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 72},
+	"dmg_out": {"title": "Dmg out", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 72},
+	"rep_in": {"title": "Reps in", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 72},
+	"rep_out": {"title": "Reps out", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 72},
+	"cap_in": {"title": "Cap in", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 72},
+	"cap_out": {"title": "Cap out", "align": HORIZONTAL_ALIGNMENT_RIGHT, "width": 72},
+	"ewar_in": {"title": "EWAR in", "align": HORIZONTAL_ALIGNMENT_LEFT, "width": 90, "icons": true},
+	"ewar_out": {"title": "EWAR out", "align": HORIZONTAL_ALIGNMENT_LEFT, "width": 90, "icons": true},
 }
 const MIN_WIDTH := 30.0
 ## Width of the resize grips around header cells (and the matching gaps between row cells).
@@ -31,6 +41,8 @@ const AUTOSIZE_PAD := 8.0
 const MAX_VIEWPORT_FRACTION := 0.9
 ## Width of each row's team swap button, mirrored by a spacer at the end of the header.
 const SWAP_W := 28.0
+## Size of the icons in `icons` columns.
+const ICON_PX := 24.0
 const SETTING := "roster/columns"
 
 ## Display order of { id, width, visible }.
@@ -41,8 +53,11 @@ var body: VBoxContainer
 var menu: PopupMenu
 ## Column id -> its header Label.
 var header_cells := {}
-## pilot -> { button, cells (HBoxContainer), labels: { column id -> Label } }.
+## pilot -> { button, cells (HBoxContainer), labels: { column id -> Label, or HBoxContainer for
+## `icons` columns } }.
 var rows := {}
+## Column id -> true for columns hidden because there is nothing to show in them.
+var unavailable := {}
 ## Grip being dragged ({} = none): { kind: "edge" | "divider", id, x }, plus the column widths
 ## when the drag started (id -> width).
 var _drag := {}
@@ -102,7 +117,25 @@ func _column(id: String) -> Dictionary:
 
 ## Ids of the shown columns, in display order.
 func visible_ids() -> Array:
-	return columns.filter(func(c): return c.visible).map(func(c): return c.id)
+	return columns.filter(_shown).map(func(c): return c.id)
+
+
+## Whether column `c` is shown: picked by the user and available.
+func _shown(c: Dictionary) -> bool:
+	return c.visible and not unavailable.has(c.id)
+
+
+## Makes column `id` available (shown if the user picked it) or not (hidden, its menu item
+## disabled). Not saved: the layout keeps the user's choice.
+func set_column_available(id: String, on: bool) -> void:
+	if on == not unavailable.has(id):
+		return
+	if on:
+		unavailable.erase(id)
+	else:
+		unavailable[id] = true
+	_apply_layout()
+	layout_changed.emit()
 
 
 func set_column_width(id: String, width: float) -> void:
@@ -148,9 +181,13 @@ func autosize(id: String) -> void:
 	var font := label.get_theme_font("font")
 	var font_size := label.get_theme_font_size("font_size")
 	var texts: Array = [COLUMNS[id].title]
-	for pilot in rows:
-		texts.append(rows[pilot].labels[id].text)
 	var width := 0.0
+	for pilot in rows:
+		var cell: Control = rows[pilot].labels[id]
+		if cell is Label:
+			texts.append(cell.text)
+		else:
+			width = maxf(width, icon_box(pilot, id).get_combined_minimum_size().x)
 	for text in texts:
 		width = maxf(width, font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
 	_column(id).width = maxf(ceilf(width + AUTOSIZE_PAD), MIN_WIDTH)
@@ -161,7 +198,7 @@ func autosize(id: String) -> void:
 func total_width() -> float:
 	var total := 0.0
 	for c in columns:
-		if c.visible:
+		if _shown(c):
 			total += c.width
 	return total
 
@@ -185,7 +222,7 @@ func _scale_to(total: float) -> void:
 	if old <= 0.0:
 		return
 	for c in columns:
-		if c.visible:
+		if _shown(c):
 			c.width = maxf(c.width * total / old, MIN_WIDTH)
 
 
@@ -245,10 +282,14 @@ func add_row(pilot: String, color: Color, swap_tooltip: String) -> Button:
 	button.add_child(cells)
 	var labels := {}
 	for id in COLUMNS:
-		var label := _cell(COLUMNS[id].align)
-		label.add_theme_color_override("font_color", color)
-		cells.add_child(label)
-		labels[id] = label
+		var cell: Control
+		if COLUMNS[id].get("icons", false):
+			cell = _icon_cell(color)
+		else:
+			cell = _cell(COLUMNS[id].align)
+			cell.add_theme_color_override("font_color", color)
+		cells.add_child(cell)
+		labels[id] = cell
 	var swap := Button.new()
 	swap.text = "⇄"
 	swap.custom_minimum_size.x = SWAP_W
@@ -267,6 +308,59 @@ func set_cell(pilot: String, id: String, text: String) -> void:
 
 func cell_text(pilot: String, id: String) -> String:
 	return rows[pilot].labels[id].text
+
+
+## Fills `icons` column `id` of `pilot`'s row with `items`, each { key, texture, text, tooltip }:
+## the texture, or `text` when it is null, with its own tooltip (clicks still reach the row). Does
+## nothing when the items are the same as last time, so it is cheap to call every frame.
+func set_cell_icons(pilot: String, id: String, items: Array) -> void:
+	var cell := icon_box(pilot, id)
+	var signature := "\n".join(items.map(func(i): return "%s|%s|%s" % [i.key, i.texture != null, i.tooltip]))
+	if cell.get_meta("signature", "") == signature:
+		return
+	cell.set_meta("signature", signature)
+	for c in cell.get_children():
+		cell.remove_child(c)
+		c.queue_free()
+	for item in items:
+		var child: Control
+		if item.texture != null:
+			var rect := TextureRect.new()
+			rect.texture = item.texture
+			rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			rect.custom_minimum_size = Vector2(ICON_PX, ICON_PX)
+			rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			child = rect
+		else:
+			var label := Label.new()
+			label.text = item.text
+			label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			label.add_theme_color_override("font_color", cell.get_meta("color", Color.WHITE))
+			child = label
+		child.tooltip_text = item.tooltip
+		child.mouse_filter = Control.MOUSE_FILTER_PASS
+		child.set_meta("key", item.key)
+		cell.add_child(child)
+
+
+## An `icons` cell: a clipping Control (so extra icons don't widen the row) around a row of icons.
+static func _icon_cell(color: Color) -> Control:
+	var cell := Control.new()
+	cell.clip_contents = true
+	cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.set_anchors_and_offsets_preset(Control.PRESET_LEFT_WIDE)
+	box.set_meta("color", color)
+	cell.add_child(box)
+	return cell
+
+
+## The icon row of `pilot`'s `icons` column `id`.
+func icon_box(pilot: String, id: String) -> HBoxContainer:
+	return rows[pilot].labels[id].get_child(0)
 
 
 static func _cell(align: HorizontalAlignment) -> Label:
@@ -290,7 +384,7 @@ func _apply_layout() -> void:
 	var ids := visible_ids()
 	header.add_child(_handle("edge", ""))
 	for c in columns:
-		if not c.visible:
+		if not _shown(c):
 			continue
 		var label := _cell(HORIZONTAL_ALIGNMENT_CENTER)
 		label.text = COLUMNS[c.id].title
@@ -311,7 +405,8 @@ func _apply_layout() -> void:
 	for i in menu.item_count:
 		var id: String = COLUMNS.keys()[i]
 		menu.set_item_checked(i, _column(id).visible)
-		menu.set_item_disabled(i, visible_ids() == [id])
+		menu.set_item_disabled(i, unavailable.has(id) or visible_ids() == [id])
+		menu.set_item_tooltip(i, "No combat log data" if unavailable.has(id) else "")
 	for pilot in rows:
 		_layout_row(rows[pilot])
 
@@ -320,12 +415,12 @@ func _layout_row(row: Dictionary) -> void:
 	var width := HANDLE_W
 	var i := 0
 	for c in columns:
-		var label: Label = row.labels[c.id]
-		row.cells.move_child(label, i)
+		var cell: Control = row.labels[c.id]
+		row.cells.move_child(cell, i)
 		i += 1
-		label.visible = c.visible
-		label.custom_minimum_size.x = c.width
-		if c.visible:
+		cell.visible = _shown(c)
+		cell.custom_minimum_size.x = c.width
+		if cell.visible:
 			width += c.width + HANDLE_W
 	row.cells.offset_left = HANDLE_W
 	var button: Button = row.button

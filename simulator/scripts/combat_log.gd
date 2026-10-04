@@ -5,7 +5,7 @@ extends RefCounted
 ## time and attributes it (and the other names in it) to the match's pilots, whose overview-OCR
 ## names may be truncated or mis-cased versions of the real ones.
 
-enum Kind { DAMAGE, MISS, SCRAM, NEUT, NOS, REMOTE_REP, OTHER }
+enum Kind { DAMAGE, MISS, SCRAM, NEUT, NOS, REMOTE_REP, OTHER, JAM }
 
 ## Fuzzy name matches (`String.similarity`) below this don't count.
 const MIN_SIMILARITY := 0.8
@@ -31,6 +31,7 @@ var path := ""
 ##   amount: float (hit points, GJ, …; NAN when none), weapon: String, quality: String
 ##   ("Hits", "Smashes", … for damage) }.
 ## For SCRAM `weapon` is "Warp scramble" / "Warp disruption"; neither side may be the listener.
+## For JAM `weapon` is the ECM module (or drone) that jammed.
 var entries: Array = []
 
 static var _tag_re := RegEx.create_from_string("<[^>]*>")
@@ -49,6 +50,9 @@ static var _neut_re := RegEx.create_from_string("^(\\d+) GJ energy neutralized (
 static var _nos_re := RegEx.create_from_string("^([-+]\\d+) GJ energy drained (to|from) (.+) - (.+)$")
 static var _rep_re := RegEx.create_from_string(
 	"^(\\d+) remote (?:armor|shield|hull|structure) (?:repaired|boosted) (to|by) (.+) - (.+)$")
+## `You're jammed by Ship [Name] - Module` / `Ship [Name] - jammed - Module` (the pilot may be missing).
+static var _jam_in_re := RegEx.create_from_string("^You're jammed by (.+?) - (.+)$")
+static var _jam_out_re := RegEx.create_from_string("^(.+?)\\s+jammed - (.+)$")
 ## `Ship [TICK] [ALLY] [Name] -`: the last bracket is the pilot.
 static var _ship_name_re := RegEx.create_from_string("^(.*?)\\s*((?:\\[[^\\]]*\\]\\s*)*)-?\\s*$")
 
@@ -182,6 +186,15 @@ static func parse_line(html: String) -> Dictionary:
 		var other := _ship_and_name(m.get_string(3))
 		_set_other(e, m.get_string(2) == "to", other[1], other[0])
 		e.weapon = m.get_string(4).strip_edges()
+		return e
+	m = _jam_in_re.search(text)
+	if m == null:
+		m = _jam_out_re.search(text)
+	if m != null:
+		e.kind = Kind.JAM
+		var other := _ship_and_name(m.get_string(1))
+		_set_other(e, not text.begins_with("You're"), other[1], other[0])
+		e.weapon = m.get_string(2).strip_edges()
 		return e
 	return e
 

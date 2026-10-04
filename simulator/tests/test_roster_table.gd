@@ -16,9 +16,17 @@ func after_each() -> void:
 	Settings._cfg = null
 
 
-func _table() -> RosterTable:
+## The original four columns; the combat-log ones are made unavailable, as with no gamelogs.
+const BASE := ["ship", "pilot", "speed", "distance"]
+const COMBAT := ["dmg_in", "dmg_out", "rep_in", "rep_out", "cap_in", "cap_out", "ewar_in", "ewar_out"]
+
+
+func _table(combat := false) -> RosterTable:
 	var t := RosterTable.new()
 	add_node(t)
+	if not combat:
+		for id in COMBAT:
+			t.set_column_available(id, false)
 	return t
 
 
@@ -47,7 +55,7 @@ func test_row_cells() -> void:
 	assert_eq(t.cell_text("p", "speed"), "12 m/s")
 	assert_eq(_row_ids(t, "p"), ["ship", "pilot", "speed", "distance"])
 	var want := RosterTable.HANDLE_W
-	for id in RosterTable.COLUMNS:
+	for id in BASE:
 		want += RosterTable.COLUMNS[id].width + RosterTable.HANDLE_W
 	assert_almost(button.custom_minimum_size.x, want)
 
@@ -107,10 +115,12 @@ func test_edge_scales_columns() -> void:
 	var widths := t.columns.map(func(c): return c.width)
 	t.set_total_width(t.total_width() * 1.5)
 	for i in widths.size():
-		assert_almost(t.columns[i].width, widths[i] * 1.5)
+		var scale := 1.5 if t.columns[i].id in BASE else 1.0
+		assert_almost(t.columns[i].width, widths[i] * scale, 1e-3, t.columns[i].id)
 	t.set_total_width(1.0)
 	for c in t.columns:
-		assert_almost(c.width, RosterTable.MIN_WIDTH)
+		if c.id in BASE:
+			assert_almost(c.width, RosterTable.MIN_WIDTH)
 
 
 func test_autosize_fits_longest_text() -> void:
@@ -238,7 +248,7 @@ func test_load_repairs_saved_layout() -> void:
 		{"id": "speed", "width": 90},
 		"junk",
 	])
-	assert_eq(cols.map(func(c): return c.id), ["speed", "ship", "pilot", "distance"])
+	assert_eq(cols.map(func(c): return c.id), ["speed", "ship", "pilot", "distance"] + COMBAT)
 	assert_almost(cols[0].width, RosterTable.MIN_WIDTH)
 	assert_false(cols[0].visible)
 	var hidden := RosterTable._load_columns(RosterTable.COLUMNS.keys().map(
@@ -261,3 +271,85 @@ func test_double_click_group() -> void:
 	plain.gui_input.emit(ev)
 	assert_eq(got, [1])
 	assert_eq(plain.mouse_filter, Control.MOUSE_FILTER_IGNORE)
+
+
+# --- combat-log columns --------------------------------------------------------
+
+func test_combat_columns_shown_when_available() -> void:
+	var t := _table(true)
+	t.add_row("p", Color.WHITE, "swap")
+	assert_eq(t.visible_ids(), BASE + COMBAT)
+	assert_eq(_titles(t).slice(4), ["Dmg in", "Dmg out", "Reps in", "Reps out", "Cap in", "Cap out",
+		"EWAR in", "EWAR out"])
+	assert_eq(_row_ids(t, "p"), BASE + COMBAT)
+
+
+func test_unavailable_columns_hide_without_changing_layout() -> void:
+	var t := _table(true)
+	t.add_row("p", Color.WHITE, "swap")
+	var changed := [0]
+	t.layout_changed.connect(func(): changed[0] += 1)
+	t.set_column_available("dmg_in", false)
+	assert_eq(changed[0], 1)
+	t.set_column_available("dmg_in", false)
+	assert_eq(changed[0], 1, "no change, no signal")
+	assert_false("dmg_in" in t.visible_ids())
+	assert_false("Dmg in" in _titles(t))
+	assert_false("dmg_in" in _row_ids(t, "p"))
+	var i := RosterTable.COLUMNS.keys().find("dmg_in")
+	assert_true(t.menu.is_item_disabled(i))
+	assert_true(t.menu.is_item_checked(i), "still picked by the user")
+	assert_true(t._column("dmg_in").visible)
+	Settings._cfg = null
+	var saved := RosterTable._load_columns(Settings.get_value("roster/columns"))
+	assert_true(saved.filter(func(c): return c.id == "dmg_in")[0].visible, "not saved as hidden")
+	t.set_column_available("dmg_in", true)
+	assert_true("dmg_in" in _row_ids(t, "p"))
+	assert_false(t.menu.is_item_disabled(i))
+
+
+func test_hidden_combat_column_via_menu() -> void:
+	var t := _table(true)
+	var i := RosterTable.COLUMNS.keys().find("ewar_out")
+	t.menu.index_pressed.emit(i)
+	assert_false("ewar_out" in t.visible_ids())
+	assert_false(t.menu.is_item_checked(i))
+
+
+func test_icon_cells() -> void:
+	var t := _table(true)
+	t.add_row("p", Color.RED, "swap")
+	var tex := ImageTexture.create_from_image(Image.create(4, 4, false, Image.FORMAT_RGBA8))
+	t.set_cell_icons("p", "ewar_in", [
+		{"key": "scram", "texture": tex, "text": "Scram", "tooltip": "Warp scramble from:\n  A (2 cycles)"},
+		{"key": "neut", "texture": null, "text": "Neut", "tooltip": "Energy neutralizer from:\n  B (1 cycles)"},
+	])
+	var box := t.icon_box("p", "ewar_in")
+	assert_eq(box.get_child_count(), 2)
+	var icon: Control = box.get_child(0)
+	assert_true(icon is TextureRect)
+	assert_eq(icon.tooltip_text, "Warp scramble from:\n  A (2 cycles)")
+	assert_eq(icon.mouse_filter, Control.MOUSE_FILTER_PASS, "clicks reach the row button")
+	var fallback: Control = box.get_child(1)
+	assert_true(fallback is Label)
+	assert_eq(fallback.text, "Neut")
+	t.set_cell_icons("p", "ewar_in", [
+		{"key": "scram", "texture": tex, "text": "Scram", "tooltip": "Warp scramble from:\n  A (2 cycles)"},
+		{"key": "neut", "texture": null, "text": "Neut", "tooltip": "Energy neutralizer from:\n  B (1 cycles)"},
+	])
+	assert_eq(box.get_child(0), icon, "same items: nothing rebuilt")
+	t.set_cell_icons("p", "ewar_in", [])
+	assert_eq(box.get_children().filter(func(c): return not c.is_queued_for_deletion()).size(), 0)
+	assert_almost(t.rows["p"].labels["ewar_in"].custom_minimum_size.x, RosterTable.COLUMNS["ewar_in"].width)
+
+
+func test_autosize_icon_column() -> void:
+	var t := _table(true)
+	t.add_row("p", Color.WHITE, "swap")
+	var items := []
+	for k in 8:
+		items.append({"key": str(k), "texture": null, "text": "Scram", "tooltip": ""})
+	t.set_cell_icons("p", "ewar_out", items)
+	t.autosize("ewar_out")
+	assert_true(t._column("ewar_out").width >= t.icon_box("p", "ewar_out").get_combined_minimum_size().x)
+	assert_true(t._column("ewar_out").width > RosterTable.COLUMNS["ewar_out"].width)
