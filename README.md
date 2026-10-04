@@ -6,6 +6,8 @@
 Scrim Simulator turns a recording of an EVE Online scrim into a 3D replay you can scrub through,
 pause, and inspect from any angle.
 
+![A match playing back in the simulator](docs/media/playback.gif)
+
 1. **Record.** Three stationary observer clients sit on grid while OBS records their overviews
    into one video.
 2. **Process.** `scrim-positions` reads (OCRs) each observer's overview in every frame and works
@@ -74,6 +76,8 @@ move or delete the original file. Team swaps (⇄ in the roster) and team names 
 team's heading) are saved per match. Pilot renames (right-click a pilot → **Rename pilot…**) apply
 in every match, and an empty name restores the original.
 
+![Orbiting the camera while a match plays](docs/media/orbit.gif)
+
 ### Controls
 
 | Input | Action |
@@ -93,6 +97,8 @@ in every match, and an empty name restores the original.
 | D / **Debug…** | Debug menu for every ship at once, vector length, and the beacons' 5 km jump range |
 | M | Toggle hull models and icons vs. plain spheres |
 | B | Toggle the 125 km arena boundary |
+
+![Measuring from one ship to another](docs/media/measure.gif)
 
 **Settings…** has the remaining options: interface scale, **Ship overlay…** (which of name, type,
 distance and speed are shown above each ship), smooth vs. straight-line movement, and the
@@ -119,7 +125,7 @@ SDE/model download controls. Resize the window to see more of the arena.
 | `simulator/` | The Godot replay viewer (`scripts/`, headless tests in `tests/`) |
 | `docs/` | Design document and the OBS template |
 | `resouces/` | Demo match and OCR sample images |
-| `scripts/` | Build and test scripts |
+| `scripts/` | Build, test and README GIF scripts |
 
 ### Run from source
 
@@ -146,6 +152,17 @@ scripts/test.sh match_data         # only simulator test files whose name contai
 
 Simulator tests live in `simulator/tests/`. Each `test_*.gd` extends `tests/test_case.gd`, and
 every `test_*` method is a test.
+
+### README GIFs
+
+```sh
+scripts/readme_gifs.sh             # re-render docs/media/{playback,measure,orbit}.gif
+scripts/readme_gifs.sh measure     # just one
+```
+
+Each GIF is scripted in `simulator/tools/readme_gif.gd` against the demo match and recorded with
+Godot's Movie Maker, so re-running gives the same result. It needs a display and the demo's hull
+models already downloaded (open the demo once first).
 
 ### Release builds
 
