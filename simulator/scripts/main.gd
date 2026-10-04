@@ -39,7 +39,6 @@ const TEAM_NAMES := {
 	MatchData.Team.RED: "Red",
 	MatchData.Team.UNKNOWN: "Unknown",
 }
-const ROSTER_WIDTH := 260.0
 ## A click lands on a ship within this many pixels of its centre (or anywhere on its hull).
 const PICK_PX := 14.0
 ## A left press released within this many pixels is a click; further is a camera drag.
@@ -94,8 +93,7 @@ var download_dialog: ConfirmationDialog
 var assets_dialog: ConfirmationDialog
 var bottom_panel: PanelContainer
 var roster_panel: PanelContainer
-var roster_box: VBoxContainer
-var roster_scroll: ScrollContainer
+var roster_table: RosterTable
 var info_panel: PanelContainer
 var info_label: Label
 var select_texture: Texture2D
@@ -277,6 +275,7 @@ func _process(delta: float) -> void:
 	if not _scrubbing:
 		timeline.set_value_no_signal(time)
 	_update_info()
+	_update_roster_cells()
 	time_label.text = "%s / %s" % [_fmt_time(time), _fmt_time(data.duration)]
 
 
@@ -552,7 +551,7 @@ func _select(pilot: String) -> void:
 	for p in roster_buttons:
 		_style_roster_button(p)
 	if selected != "" and roster_buttons.has(selected):
-		roster_scroll.ensure_control_visible(roster_buttons[selected])
+		roster_table.scroll.ensure_control_visible(roster_buttons[selected])
 	_update_info()
 
 
@@ -601,13 +600,10 @@ func _update_info() -> void:
 		lines.append("Not on grid")
 	else:
 		lines.append(now.ship_type)
-		var prev := data.sample(selected, time - 0.5)
-		var next := data.sample(selected, time + 0.5)
-		var a: Dictionary = prev if not prev.is_empty() else now
-		var b: Dictionary = next if not next.is_empty() else now
-		if b.t > a.t:
-			lines.append("Speed: %.0f m/s" % ((b.pos - a.pos).length() / (b.t - a.t)))
-		var d: float = now.pos.distance_to(MatchData.CENTRE_M) * M_TO_UNITS
+		var motion := _motion(selected)
+		if not is_nan(motion.speed):
+			lines.append("Speed: %.0f m/s" % motion.speed)
+		var d: float = motion.dist_km
 		lines.append("From centre: %.1f km (boundary %.1f km)" % [d, BOUNDARY_KM - d])
 	var ship: Dictionary = ships[selected]
 	if time >= ship.death_t:
@@ -615,6 +611,24 @@ func _update_info() -> void:
 	lines.append("Following" if tracked == selected else "Double-click to follow")
 	info_label.text = "\n".join(lines)
 	info_label.modulate = TEAM_COLORS[team].lerp(Color.WHITE, 0.5)
+
+
+## `pilot`'s ship type, speed (m/s, averaged over a second; NAN if unknown) and distance from the
+## centre (km) at the current time, or {} when it isn't on grid.
+func _motion(pilot: String) -> Dictionary:
+	var now := data.sample(pilot, time)
+	if now.is_empty():
+		return {}
+	var prev := data.sample(pilot, time - 0.5)
+	var next := data.sample(pilot, time + 0.5)
+	var a: Dictionary = prev if not prev.is_empty() else now
+	var b: Dictionary = next if not next.is_empty() else now
+	var speed: float = (b.pos - a.pos).length() / (b.t - a.t) if b.t > a.t else NAN
+	return {
+		"ship_type": now.ship_type,
+		"speed": speed,
+		"dist_km": now.pos.distance_to(MatchData.CENTRE_M) * M_TO_UNITS,
+	}
 
 
 # --- playback ----------------------------------------------------------------
@@ -956,30 +970,38 @@ func _build_settings(layer: CanvasLayer) -> void:
 	buttons.add_child(models_download)
 
 
-## Right-hand panel listing each team's pilots: click one to follow it, ⇄ to change its team.
+## Right-hand table of each team's pilots (ship, pilot, speed, distance from centre): click one to
+## follow it, ⇄ to change its team.
 func _build_roster(layer: CanvasLayer) -> void:
 	roster_panel = PanelContainer.new()
 	roster_panel.set_anchors_and_offsets_preset(Control.PRESET_RIGHT_WIDE)
-	roster_panel.offset_left = -ROSTER_WIDTH
+	roster_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	roster_panel.visible = false
 	layer.add_child(roster_panel)
 	var keep_above_bar := func(): roster_panel.offset_bottom = -bottom_panel.size.y
 	bottom_panel.resized.connect(keep_above_bar)
 	keep_above_bar.call()
 
-	roster_scroll = ScrollContainer.new()
-	roster_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	roster_panel.add_child(roster_scroll)
-	roster_box = VBoxContainer.new()
-	roster_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	roster_scroll.add_child(roster_box)
+	roster_table = RosterTable.new()
+	roster_table.row_pressed.connect(_set_tracked)
+	roster_table.swap_pressed.connect(_swap_team)
+	roster_table.layout_changed.connect(_fit_roster)
+	roster_panel.add_child(roster_table)
+	_fit_roster()
+
+
+## Sizes the roster panel to its columns, plus room for the scroll bar.
+func _fit_roster() -> void:
+	var bar := roster_table.scroll.get_v_scroll_bar().get_combined_minimum_size().x
+	var panel := roster_panel.get_theme_stylebox("panel")
+	var width := roster_table.header.get_combined_minimum_size().x + bar + panel.get_minimum_size().x
+	roster_panel.offset_left = -width
+	roster_panel.offset_right = 0.0
 
 
 ## Rebuilds the roster from the loaded match's teams.
 func _refresh_roster() -> void:
-	for c in roster_box.get_children():
-		roster_box.remove_child(c)
-		c.queue_free()
+	roster_table.clear()
 	roster_buttons.clear()
 	roster_panel.visible = data != null
 	if data == null:
@@ -993,36 +1015,34 @@ func _refresh_roster() -> void:
 		if team == MatchData.Team.UNKNOWN and members.is_empty():
 			continue
 		var color: Color = TEAM_COLORS[team]
-		var header := Label.new()
-		header.text = "%s (%d)" % [TEAM_NAMES[team], members.size()]
-		header.modulate = color
-		roster_box.add_child(header)
+		roster_table.add_group("%s (%d)" % [TEAM_NAMES[team], members.size()], color)
 		var other: int = MatchData.Team.BLUE if team != MatchData.Team.BLUE else MatchData.Team.RED
 		for pilot in members:
-			var row := HBoxContainer.new()
-			roster_box.add_child(row)
-			var button := Button.new()
-			button.text = "%s — %s" % [data.tracks[pilot][0].ship_type, _short_name(pilot)]
-			button.toggle_mode = true
-			button.flat = true
-			button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-			button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-			button.clip_text = true
-			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			button.focus_mode = Control.FOCUS_NONE
+			var button := roster_table.add_row(pilot, color, "Move to %s" % TEAM_NAMES[other])
 			button.tooltip_text = "Centre the camera on %s" % pilot
-			button.add_theme_color_override("font_color", color)
 			button.set_pressed_no_signal(pilot == tracked)
-			button.pressed.connect(_set_tracked.bind(pilot))
-			row.add_child(button)
 			roster_buttons[pilot] = button
 			_style_roster_button(pilot)
-			var swap := Button.new()
-			swap.text = "⇄"
-			swap.focus_mode = Control.FOCUS_NONE
-			swap.tooltip_text = "Move to %s" % TEAM_NAMES[other]
-			swap.pressed.connect(_swap_team.bind(pilot))
-			row.add_child(swap)
+			roster_table.set_cell(pilot, "ship", data.tracks[pilot][0].ship_type)
+			roster_table.set_cell(pilot, "pilot", _short_name(pilot))
+	_update_roster_cells()
+
+
+## Refreshes each roster row's live columns: current hull, speed and distance from centre.
+## Pilots off grid show dashes; dead ones are dimmed.
+func _update_roster_cells() -> void:
+	if data == null:
+		return
+	for pilot in roster_buttons:
+		var motion := _motion(pilot)
+		if motion.is_empty():
+			roster_table.set_cell(pilot, "speed", "—")
+			roster_table.set_cell(pilot, "distance", "—")
+		else:
+			roster_table.set_cell(pilot, "ship", motion.ship_type)
+			roster_table.set_cell(pilot, "speed", "—" if is_nan(motion.speed) else "%.0f m/s" % motion.speed)
+			roster_table.set_cell(pilot, "distance", "%.1f km" % motion.dist_km)
+		roster_buttons[pilot].modulate.a = 0.5 if time >= ships[pilot].death_t else 1.0
 
 
 ## Roster abbreviation of a pilot name: the first word, then initials ("Tormund Some Name" ->
