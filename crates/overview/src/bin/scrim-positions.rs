@@ -12,6 +12,13 @@
 //! video second 0 from the scene's `chat` rect and the match's CD -> WF/GF window, only that window
 //! is OCR'd, and every CSV row gets its EVE time (`eve_time`) so the data can be lined up with
 //! other EVE logs.
+//!
+//! The audio of the processed window is saved next to the CSV as `<video>.mp3` (as ScrimTrimmer's
+//! `--extract-audio` does), so it starts with the data and the simulator pairs the two by name.
+//!
+//! With `--combat-log` (and EVE times), every given EVE gamelog with combat during the match is
+//! cut down to the match and saved in `<video>.positions.logs/` next to the CSV, the folder the
+//! simulator reads a match's combat logs from.
 
 use anyhow::{bail, ensure, Context, Result};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeDelta, Utc};
@@ -39,9 +46,17 @@ struct Cli {
     /// tick rate.
     #[arg(long, default_value_t = 1.0)]
     fps: f64,
-    /// Output directory for `<video>.positions.csv`.
+    /// Output directory for `<video>.positions.csv` and the same window's audio, `<video>.mp3`.
     #[arg(long, default_value = "resouces/matches/out")]
     out: PathBuf,
+    /// Don't extract the processed window's audio to `<video>.mp3`.
+    #[arg(long)]
+    no_audio: bool,
+    /// EVE gamelog (`Documents/EVE/logs/Gamelogs/*.txt`), or a folder of them (repeatable).
+    /// Each log with combat during the match is trimmed to it and saved in
+    /// `<video>.positions.logs/`. Needs EVE times (`--chat-log` or `--t0`).
+    #[arg(long = "combat-log", value_name = "PATH")]
+    combat_logs: Vec<PathBuf>,
     /// EVE Local chat log covering the recording (repeatable). Finds the match's CD -> WF/GF
     /// window and the EVE time base with ScrimTrimmer; only the match is processed, and the CSV
     /// gains an `eve_time` column.
@@ -218,10 +233,167 @@ fn main() -> Result<()> {
             })
         }
         .with_context(|| format!("finding the match in {}", video.display()))?;
-        process_video(video, &scene, &font, cli.fps, &cli.out, &window)
+        let eve_span = process_video(video, &scene, &font, cli.fps, &cli.out, &window)
             .with_context(|| format!("processing {}", video.display()))?;
+        if !cli.no_audio {
+            save_audio(video, &cli.out, &window);
+        }
+        if !cli.combat_logs.is_empty() {
+            match eve_span {
+                Some(span) => save_combat_logs(&cli.combat_logs, video, &cli.out, span),
+                None => eprintln!(
+                    "  warning: no EVE times (give --chat-log or --t0); combat logs not saved"
+                ),
+            }
+        }
     }
     Ok(())
+}
+
+/// Extract the window's audio to `<out>/<video stem>.mp3`. Audio is an extra, so a failure (or a
+/// recording without an audio track) is reported and the positions CSV is kept.
+fn save_audio(video: &Path, out: &Path, window: &Window) {
+    let stem = video.file_stem().unwrap_or_default().to_string_lossy();
+    let path = out.join(format!("{stem}.mp3"));
+    match videoin::extract_audio(video, window.start_s, window.end_s, &path) {
+        Ok(true) => println!("  wrote {}", path.display()),
+        Ok(false) => println!("  {} has no audio track; no audio saved", video.display()),
+        Err(e) => eprintln!("  warning: audio extraction failed: {e:#}"),
+    }
+}
+
+/// Save the part of each gamelog in `logs` (files, or folders of them) logged during `span` (EVE
+/// times of the first and last CSV rows) to `<out>/<video stem>.positions.logs/`, skipping logs
+/// with no combat in it. Like audio, combat logs are an extra: failures are reported and the CSV
+/// is kept.
+fn save_combat_logs(
+    logs: &[PathBuf],
+    video: &Path,
+    out: &Path,
+    span: (DateTime<Utc>, DateTime<Utc>),
+) {
+    let stem = video.file_stem().unwrap_or_default().to_string_lossy();
+    let dest = out.join(format!("{stem}.positions.logs"));
+    let (first, last) = (span.0.naive_utc(), span.1.naive_utc());
+    // A rerun replaces the previous run's logs rather than adding to them.
+    if let Ok(old) = std::fs::read_dir(&dest) {
+        for entry in old.flatten() {
+            if entry.path().extension().is_some_and(|e| e.eq_ignore_ascii_case("txt")) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let mut saved = std::collections::BTreeSet::new();
+    for log in logs {
+        if !log.is_dir() {
+            // Picked by hand, so say what became of it.
+            match save_combat_log(log, &dest, first, last) {
+                Ok(Some(path)) => {
+                    println!("  saved {}", path.display());
+                    saved.insert(path);
+                }
+                Ok(None) => println!("  {}: no combat during the match", log.display()),
+                Err(e) => eprintln!("  warning: {}: {e:#}", log.display()),
+            }
+            continue;
+        }
+        let entries = match std::fs::read_dir(log) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("  warning: reading {}: {e}", log.display());
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt")) {
+                continue;
+            }
+            // Cheap skips before reading a whole Gamelogs folder: a log started after the match
+            // (its name starts with the session's EVE start time), or last written before it (a
+            // copied log gets a new mtime, so this can only let extra logs through).
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name.get(..15).and_then(|s| NaiveDateTime::parse_from_str(s, "%Y%m%d_%H%M%S").ok())
+                .is_some_and(|start| start > last)
+            {
+                continue;
+            }
+            if entry.metadata().and_then(|m| m.modified()).is_ok_and(|m| {
+                DateTime::<Utc>::from(m) < span.0 - TimeDelta::minutes(1)
+            }) {
+                continue;
+            }
+            match save_combat_log(&path, &dest, first, last) {
+                Ok(Some(path)) => {
+                    println!("  saved {}", path.display());
+                    saved.insert(path);
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("  warning: {}: {e:#}", path.display()),
+            }
+        }
+    }
+    println!("  {} combat log(s) with combat during the match", saved.len());
+}
+
+/// Save gamelog `log` trimmed to `first..=last` in `dest`, returning where; None if it has no
+/// combat then. An identical log already there (the same file given twice) is reused; a
+/// different one with the same name (from another folder) gets a " (2)", … suffix.
+fn save_combat_log(
+    log: &Path,
+    dest: &Path,
+    first: NaiveDateTime,
+    last: NaiveDateTime,
+) -> Result<Option<PathBuf>> {
+    let bytes = std::fs::read(log).context("reading")?;
+    let Some(text) = trim_gamelog(&String::from_utf8_lossy(&bytes), first, last) else {
+        bail!("not an EVE gamelog (no Listener header)");
+    };
+    if !text.lines().any(|l| l.contains("] (combat) ")) {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
+    let stem = log.file_stem().unwrap_or_default().to_string_lossy();
+    for n in 1.. {
+        let name = if n == 1 { format!("{stem}.txt") } else { format!("{stem} ({n}).txt") };
+        let path = dest.join(name);
+        match std::fs::read_to_string(&path) {
+            Ok(existing) if existing == text => return Ok(Some(path)),
+            Ok(_) => continue,
+            Err(_) => {
+                std::fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
+                return Ok(Some(path));
+            }
+        }
+    }
+    unreachable!()
+}
+
+/// Gamelog `text` cut down to its header and the lines logged between EVE times `first` and
+/// `last` (a multi-line message's extra lines go with it), as the simulator's `CombatLog.trim`
+/// does. None if `text` isn't a gamelog (no `Listener:` header).
+fn trim_gamelog(text: &str, first: NaiveDateTime, last: NaiveDateTime) -> Option<String> {
+    let mut out = String::new();
+    let (mut header, mut listener, mut keep) = (true, false, false);
+    for line in text.split_inclusive('\n') {
+        let time = line
+            .strip_prefix("[ ")
+            .and_then(|l| l.get(..19))
+            .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y.%m.%d %H:%M:%S").ok());
+        header = header && time.is_none();
+        if header {
+            listener = listener || line.trim().starts_with("Listener:");
+            out.push_str(line);
+            continue;
+        }
+        if let Some(t) = time {
+            keep = t >= first && t <= last;
+        }
+        if keep {
+            out.push_str(line);
+        }
+    }
+    listener.then_some(out)
 }
 
 /// One observer panel, calibrated for this video.
@@ -238,7 +410,7 @@ fn process_video(
     fps: f64,
     out: &Path,
     window: &Window,
-) -> Result<()> {
+) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
     let started = std::time::Instant::now();
     let mut decoder = videoin::Decoder::open_range(video, Some(fps), window.start_s, window.end_s)?;
     println!(
@@ -336,16 +508,21 @@ fn process_video(
         positions_csv(&per_observer, &roster, &readings, &solved, window.eve_origin),
     )?;
     print_summary(&per_observer, &roster, &readings, &solved);
-    if let (Some(origin), Some(first), Some(last)) = (window.eve_origin, times.first(), times.last()) {
-        println!("  EVE time {} -> {}", eve_time(origin, *first), eve_time(origin, *last));
-    }
+    let eve_span = match (window.eve_origin, times.first(), times.last()) {
+        (Some(origin), Some(&first), Some(&last)) => {
+            println!("  EVE time {} -> {}", eve_time(origin, first), eve_time(origin, last));
+            let at = |t: f64| origin + TimeDelta::milliseconds((t * 1000.0).round() as i64);
+            Some((at(first), at(last)))
+        }
+        _ => None,
+    };
     println!(
         "  wrote {} ({} frames in {:.0}s)",
         path.display(),
         times.len(),
         started.elapsed().as_secs_f64()
     );
-    Ok(())
+    Ok(eve_span)
 }
 
 /// How many of each pilot's earliest three-observer ticks feed corner inference. Pilots start
@@ -641,6 +818,23 @@ mod tests {
         .unwrap();
         assert_eq!(b.pairs, vec![(8, 41), (59, 95)]);
         assert_eq!(b.t0_utc, "2026-04-04T17:52:22Z");
+    }
+
+    #[test]
+    fn gamelog_trimmed_to_match() {
+        let log = "------\r\n  Gamelog\r\n  Listener: Some Pilot\r\n  Session Started: 2026.04.04 17:00:00\r\n------\r\n\
+            [ 2026.04.04 17:43:58 ] (combat) before\r\n\
+            [ 2026.04.04 17:44:00 ] (combat) during\r\n\
+            [ 2026.04.04 17:44:01 ] (notify) multi\r\nline\r\n\
+            [ 2026.04.04 17:45:01 ] (combat) after\r\n";
+        let t = |s| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+        let trimmed = trim_gamelog(log, t("2026-04-04 17:44:00"), t("2026-04-04 17:45:00")).unwrap();
+        assert!(trimmed.starts_with("------\r\n  Gamelog\r\n  Listener: Some Pilot\r\n"));
+        assert!(trimmed.contains("(combat) during\r\n"));
+        assert!(trimmed.ends_with("(notify) multi\r\nline\r\n"));
+        assert!(!trimmed.contains("before") && !trimmed.contains("after"));
+        assert!(trim_gamelog("[ 2026.04.04 17:44:00 ] (combat) x\n", t("2026-04-04 17:44:00"),
+            t("2026-04-04 17:45:00")).is_none());
     }
 
     #[test]

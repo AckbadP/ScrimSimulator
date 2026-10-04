@@ -36,6 +36,7 @@ Each release has two zips per platform. You only need the first to watch matches
 | File | What it is |
 |---|---|
 | `scrim-positions` (`.exe`) | Turns a recorded match video into a `*.positions.csv`. Needs `ffmpeg` and `ffprobe` on your `PATH`. |
+| `scrim-positions-gui` (`.exe`) | A window for running `scrim-positions` without the command line. Keep it next to `scrim-positions`. |
 | `scene.json` | Where each observer's overview is in a video recorded with the [OBS template](docs/obs/README.md). |
 
 ## Quick start: watch the demo match
@@ -67,9 +68,18 @@ This uses `scrim-positions` from the separate `scrim-positions-…zip` download 
 scrim-positions --scene docs/obs/scene.json --out out/ match.mkv
 ```
 
-This writes `out/match.positions.csv`. `scene.json` tells it where each observer's overview is in
+This writes `out/match.positions.csv` and the recording's audio as `out/match.mp3` (skip it with
+`--no-audio`); the simulator pairs the two by name when the folder is added. `scene.json` tells it where each observer's overview is in
 the video frame. The one in `docs/obs/` matches the OBS template; adjust its panel rectangles if
 your layout differs.
+
+### Without the command line
+
+`scrim-positions-gui` runs `scrim-positions` from a window: pick the video, the chat log (see
+below), the output folder and, optionally, the pilots' gamelogs (**Add logs…**; each is listed
+with its character so you can tell them apart), untick **Extract audio** if you
+don't want the mp3, and press **Run**. Its output is shown as it works, and your choices are
+remembered for next time. It looks for `scrim-positions` and `scene.json` next to itself.
 
 The CSV has one row per pilot per second:
 `t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m`.
@@ -89,12 +99,18 @@ find the EVE time at the start of the video, and finds the match in the log: fro
 `10, 9, 8…` countdown) to `WF`/`GF`. Only that window is OCR'd, and the CSV gains an `eve_time`
 column (ISO 8601 UTC, e.g. `2026-04-04T17:43:59.000Z`): the first row is the start of the data, the
 last row the end, and every tick in between can be lined up with combat logs and other EVE logs.
+The saved `match.mp3` covers the same window, so it starts with the data.
 
 - More than one CD→WF in the video: pick one with `--match N`.
 - `--t0 HH:MM:SS` gives the EVE time at video second 0 yourself, skipping the chat OCR.
 - `--tournament` uses the tournament system messages ("30 seconds until match start",
   "Match completed!") instead.
 - Without `--chat-log`, `--t0 2026-04-04T17:43:55Z` stamps the whole video with EVE times.
+- `--combat-log FILE` (repeatable; a folder such as `Documents/EVE/logs/Gamelogs` works too) saves
+  each gamelog with combat during the match, cut down to the match, in
+  `out/match.positions.logs/`, where the simulator picks them up when the CSV is added (see
+  [combat logs](#match-list)). Logs with no combat in the match, such as the observers', are
+  skipped.
 
 This needs a source checkout (it runs `scripts/scrim_trimmer_bridge.py`), Python 3 and Tesseract:
 
@@ -114,7 +130,8 @@ The main menu lists the matches you have added. **Add match…** adds a `*.posit
 dropping a CSV onto the window adds it and opens it straight away. Select a match and use
 **Rename…**, **Remove** or **Add audio…** (also on its right-click menu). Audio (ogg, mp3 or wav) should start at the same moment
 as the match data; it then plays in sync with the replay, at any playback speed.
-[ScrimTrimmer](https://github.com/AckbadP/ScrimTrimmer) can extract a match's audio for this.
+`scrim-positions` saves it next to the CSV, or
+[ScrimTrimmer](https://github.com/AckbadP/ScrimTrimmer) can extract a match's audio.
 **Menu** returns
 to the list.
 
