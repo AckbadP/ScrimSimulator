@@ -19,26 +19,34 @@ Nothing reads EVE client memory and nothing automates or injects input. The pipe
 what the client draws on screen for the player. See [`docs/DESIGN.md`](docs/DESIGN.md) for the
 full design and the maths.
 
-## What's in the download
+## What's in the downloads
 
-Each release zip contains:
+Each release has two zips per platform. You only need the first to watch matches.
+
+**`scrim-simulator-…zip`**, the replay viewer:
 
 | File | What it is |
 |---|---|
 | `scrim-simulator` (`.x86_64` / `.exe`) | The replay viewer. |
 | `glb-undraco` | Helper the simulator runs to unpack downloaded ship models. Keep it next to the simulator. |
-| `scrim-positions` | Turns a recorded match video into a `*.positions.csv`. Needs `ffmpeg` and `ffprobe` on your `PATH`. |
+| `demo/` | The demo match and a combat log for it, added to the match list on first run. |
+
+**`scrim-positions-…zip`**, for processing your own recordings:
+
+| File | What it is |
+|---|---|
+| `scrim-positions` (`.exe`) | Turns a recorded match video into a `*.positions.csv`. Needs `ffmpeg` and `ffprobe` on your `PATH`. |
+| `scene.json` | Where each observer's overview is in a video recorded with the [OBS template](docs/obs/README.md). |
 
 ## Quick start: watch the demo match
 
-1. Unzip the release and run `scrim-simulator`.
+1. Unzip the simulator download and run `scrim-simulator`.
 2. On first run it asks to download ship data: sizes from CCP's Static Data Export, bracket icons
    from CCP's Image Export Collection, and hull models from
    [EVE_Model_Gallery](https://github.com/EstamelGG/EVE_Model_Gallery). These go into `sde/` next
    to the executable. Models are fetched one hull at a time, the first time a match needs one.
-3. Click **Add match…** and pick
-   [`resouces/demo/match_03.positions.csv`](resouces/demo/match_03.positions.csv) from this
-   repository (or just drop the file onto the window).
+3. **Demo match** is already in the match list. Select it and click **Open** (or double-click it).
+   If you remove it, it stays removed; add it back with **Add match…** and the file in `demo/`.
 4. Press **Start** (or Space).
 
 ## Recording your own match
@@ -48,6 +56,8 @@ clients side by side, and explains how to set it up: which windows to capture, h
 overview, and which video settings to use. Record near-lossless. The OCR needs crisp text.
 
 ## Processing a recording
+
+This uses `scrim-positions` from the separate `scrim-positions-…zip` download (or a source build).
 
 ```sh
 scrim-positions --scene docs/obs/scene.json --out out/ match.mkv

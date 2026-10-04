@@ -2,15 +2,22 @@ extends "res://tests/test_case.gd"
 ## MatchLibrary: adding, listing and removing matches, in a temp dir instead of user://matches.
 
 var _saved_dir: String
+var _saved_settings: String
 
 
 func before_each() -> void:
 	_saved_dir = MatchLibrary.dir
 	MatchLibrary.dir = temp_dir().path_join("matches")
+	_saved_settings = Settings.path
+	Settings.path = temp_dir().path_join("settings.cfg")
+	Settings._cfg = null
 
 
 func after_each() -> void:
 	MatchLibrary.dir = _saved_dir
+	MatchLibrary.demo_dir = ""
+	Settings.path = _saved_settings
+	Settings._cfg = null
 
 
 ## A CSV named `name` in its own temp dir, holding `body`.
@@ -265,3 +272,39 @@ func test_remove_deletes_audio() -> void:
 	var audio := MatchLibrary.set_audio(path, write_wav())
 	MatchLibrary.remove(path)
 	assert_false(FileAccess.file_exists(audio))
+
+
+## A release-style `demo/` dir: the checked-in demo match and its gamelog as "Demo match".
+func _demo_dir() -> String:
+	var src: String = preload("res://tests/test_demo_match.gd").demo_path()
+	var d := temp_dir().path_join("demo")
+	DirAccess.make_dir_recursive_absolute(d.path_join("Demo match.positions.logs"))
+	DirAccess.copy_absolute(src, d.path_join("Demo match.positions.csv"))
+	for gamelog in MatchLibrary.log_paths(src):
+		DirAccess.copy_absolute(gamelog, d.path_join("Demo match.positions.logs").path_join(gamelog.get_file()))
+	return d
+
+
+func test_add_demo_adds_match_and_logs() -> void:
+	MatchLibrary.demo_dir = _demo_dir()
+	MatchLibrary.add_demo()
+	var entries := MatchLibrary.list()
+	assert_eq(entries.size(), 1)
+	assert_eq(entries[0].name, "Demo match")
+	assert_eq(MatchLibrary.log_paths(entries[0].path).size(), 1)
+	assert_true(Settings.get_value("library/demo_added"))
+
+
+func test_removed_demo_stays_removed() -> void:
+	MatchLibrary.demo_dir = _demo_dir()
+	MatchLibrary.add_demo()
+	MatchLibrary.remove(MatchLibrary.list()[0].path)
+	MatchLibrary.add_demo()
+	assert_eq(MatchLibrary.list(), [])
+
+
+func test_missing_demo_is_noop() -> void:
+	MatchLibrary.demo_dir = temp_dir().path_join("nope")
+	MatchLibrary.add_demo()
+	assert_eq(MatchLibrary.list(), [])
+	assert_false(Settings.get_value("library/demo_added"), "a later run can still add it")
