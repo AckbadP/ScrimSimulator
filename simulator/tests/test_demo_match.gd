@@ -270,6 +270,35 @@ func test_viewer_loads_demo_combat_log() -> void:
 	assert_eq(m.data.combat_logs[0].pilot, "Caldari Citizen 6206817")
 
 
+## Moves the paused viewer to match time `t` and draws a frame.
+static func _show_at(m: Main, t: float) -> void:
+	m._seek(t)
+	m._process(0.0)
+
+
+func test_viewer_shows_demo_combat_columns() -> void:
+	var m := _viewer()
+	for id in ["dmg_in", "dmg_out", "cap_in", "cap_out", "ewar_in", "ewar_out"]:
+		assert_false(m.roster_table.unavailable.has(id), "%s shown" % id)
+	# Its only remote reps come from drones, which aren't pilots.
+	assert_true(m.roster_table.unavailable.has("rep_in"))
+	m._set_playing(false)
+	var skiff := "Caldari Citizen 6206817"
+	_show_at(m, 10.0)  # Its railguns hit at 7 s and 10 s.
+	assert_eq(m.roster_table.cell_text(skiff, "dmg_out"), "%d" % roundi((204.0 + 113.0) / CombatStats.RATE_WINDOW_S))
+	_show_at(m, 0.0)
+	assert_eq(m.roster_table.cell_text(skiff, "dmg_out"), "—", "before any shots")
+	# 14:03:39: Porpoise [Minmatar Citizen 0254120] scrams Venture [Gallente Citizen 1635012].
+	_show_at(m, 17.0)
+	var box := m.roster_table.icon_box("Gallente Citizen 1635012", "ewar_in")
+	var scram := box.get_children().filter(func(c): return c.get_meta("key") == "scram")
+	assert_eq(scram.size(), 1)
+	assert_true(scram[0].tooltip_text.begins_with("Warp scramble from:"), scram[0].tooltip_text)
+	assert_true(scram[0].tooltip_text.contains(m._pilot_name("Minmatar Citizen 0254120")), scram[0].tooltip_text)
+	var out := m.roster_table.icon_box("Minmatar Citizen 0254120", "ewar_out").get_children()
+	assert_true(out.any(func(c): return c.get_meta("key") == "scram"), "and on the scrammer's outgoing side")
+
+
 func test_viewer_plays_through() -> void:
 	var m := _viewer()
 	m.speed = 10.0

@@ -16,6 +16,9 @@ const NEUT_OUT := "<color=0xff7fffff><b>94 GJ</b><color=0x77ffffff><font size=10
 const NOS_IN := "<color=0xffe57f7f><b>-3 GJ</b><color=0x77ffffff><font size=10> energy drained to </font><b><color=0xffffffff><font size=12><color=0xFFFFFFFF><b>Ashimmu</b></color></font> <font size=11>[Shunsuke Amouh] -</font></b><color=0x77ffffff><font size=10> - Medium Energy Nosferatu II</font>"
 const NOS_OUT := "<color=0xff7fffff><b>+33 GJ</b><color=0x77ffffff><font size=10> energy drained from </font><b><color=0xffffffff><font size=12><color=0xFFFFFFFF><b>Oneiros</b></color></font> </b><color=0x77ffffff><font size=10> - Medium Ghoul Compact Energy Nosferatu</font>"
 const REP_IN := "<color=0xffccff66><b>15</b><color=0x77ffffff><font size=10> remote armor repaired by </font><b><color=0xffffffff><font size=12><color=0xFFFFFFFF><b>Light Armor Maintenance Bot I</b></color></font> <font size=11>[Light Armor Maintenance Bot I] -</font></b><color=0x77ffffff><font size=10> - Light Armor Maintenance Bot I</font>"
+const JAM_IN := "<color=0x77ffffff><font size=10>You're</font> <color=0xffffffff><b>jammed</b> <color=0x77ffffff><font size=10>by</font> <color=0xffffffff><b><font size=12><color=0xFFFFFFFF><b>Falcon</b></color></font> </b><color=0x77ffffff><font size=10> - Umbra Scoped Radar ECM</font>"
+const JAM_OUT := "<color=0xffffffff><b><font size=12><color=0xFFFFFFFF><b>Huginn</b></color></font> <font size=11>[Shunsuke Amouh] -</font> jammed</b><color=0x77ffffff><font size=10> - Enfeebling Scoped Ladar ECM</font>"
+const JAM_OUT_NO_PILOT := "<color=0xffffffff><b><font size=12><color=0xFFFFFFFF><b>Pontifex</b></color></font>  jammed</b><color=0x77ffffff><font size=10> - BZ-5 Scoped Gravimetric ECM</font>"
 const REP_OUT := "<color=0xffccff66><b>488</b><color=0x77ffffff><font size=10> remote shield boosted to </font><b><color=0xffffffff><font size=12><color=0xFFFFFFFF><b>Scythe</b></color></font> </b><color=0x77ffffff><font size=10> - Medium Murky Compact Remote Shield Booster</font>"
 
 
@@ -126,6 +129,19 @@ func test_remote_reps() -> void:
 	assert_eq([e.source, e.target], ["Light Armor Maintenance Bot I", ""])
 	e = CombatLog.parse_line(REP_OUT)
 	assert_eq([e.source, e.target, e.weapon], ["", "Scythe", "Medium Murky Compact Remote Shield Booster"])
+
+
+func test_jams() -> void:
+	var e := CombatLog.parse_line(JAM_IN)
+	assert_eq(e.kind, K.JAM)
+	assert_eq([e.source, e.source_ship, e.target, e.weapon], ["Falcon", "Falcon", "", "Umbra Scoped Radar ECM"])
+	e = CombatLog.parse_line(JAM_OUT)
+	assert_eq(e.kind, K.JAM)
+	assert_eq([e.source, e.target, e.target_ship, e.weapon],
+			["", "Shunsuke Amouh", "Huginn", "Enfeebling Scoped Ladar ECM"])
+	e = CombatLog.parse_line(JAM_OUT_NO_PILOT)
+	assert_eq(e.kind, K.JAM)
+	assert_eq([e.source, e.target, e.weapon], ["", "Pontifex", "BZ-5 Scoped Gravimetric ECM"])
 
 
 func test_unknown_is_other() -> void:

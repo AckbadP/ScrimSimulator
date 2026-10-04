@@ -110,8 +110,20 @@ the pilot whose name is its listener's (allowing for names the overview cut shor
 with the replay by EVE time, so the match's CSV needs an `eve_time` column (see
 [One match, with EVE timestamps](#one-match-with-eve-timestamps)). Only the part of a log written
 during the match is saved; the rest is discarded, and a log with no combat during the match isn't
-added. They aren't shown in the viewer yet. Logs saved in a `<csv name without .csv>.logs/` folder
-next to a CSV come along when the CSV is added, as the demo match's does.
+added. Logs saved in a `<csv name without .csv>.logs/` folder next to a CSV come along when the
+CSV is added, as the demo match's does.
+
+With logs attached, the roster gains combat columns: **Dmg in/out**, **Reps in/out** and **Cap
+in/out** (HP or GJ per second over the last 10 s of the replay; cap counts neuts and nosferatus),
+and **EWAR in/out**, an icon per kind of electronic warfare on or by the pilot at that moment —
+scrams, disruptors, neuts, nosferatus and ECM jams. Each lasts its module's cycle, estimated from
+the log (overheating can make it a little off). Hover an icon for who it is from or to and how
+many cycles so far. Events seen in several logs are counted once; drones and pilots that can't be
+matched to the replay are left out. Columns with no data are hidden, and like the others they can
+be moved, resized or hidden from the roster header. EVE gamelogs don't record sensor dampeners,
+tracking or guidance disruptors, target painters, or remote sensor boosters and tracking
+computers, so those never show. EWAR icons come with the ship icon download; if you downloaded it
+before this feature, download it again in Settings to get them (until then they show as text).
 
 Added matches are copied into the simulator's own library
 (`~/.local/share/godot/app_userdata/simulator/matches` on Linux), so they stay available if you

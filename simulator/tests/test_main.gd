@@ -268,6 +268,8 @@ func test_menu_adds_combat_logs() -> void:
 	var m := _main()
 	m.load_match(made[0])
 	assert_eq(m.data.combat_logs, [])
+	for id in CombatStats.RATE_IDS + CombatStats.EWAR_IDS:
+		assert_true(m.roster_table.unavailable.has(id), "no logs: %s hidden" % id)
 	m._show_menu()
 	var not_a_log := temp_dir().path_join("notes.txt")
 	FileAccess.open(not_a_log, FileAccess.WRITE).store_string("hello")

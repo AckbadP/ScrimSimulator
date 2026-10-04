@@ -14,7 +14,6 @@
 - pause, play, and navigation of video along with timeline
 - stop updating position of ships once it becomes a capsule
 - backtrack in time of 100km jump to calculate mjd activation
-- incoming and outgoing ewar tracking based on combat log
 - instead of one unit 1km, should be 1 unit 1m
 - web interface for simulator
 - add popup for 10s countdown

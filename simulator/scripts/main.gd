@@ -103,6 +103,8 @@ var team_names := {}
 ## Gamelog file name -> pilot it belongs to, where the listener's name doesn't pick the right one
 ## (see `CombatLog.sync`); saved like `team_overrides`.
 var log_pilots := {}
+## What the open match's gamelogs say about each pilot (roster combat columns).
+var combat_stats := CombatStats.new()
 ## CSV pilot name -> display name, for every match (setting `names/pilots`).
 var pilot_names: Dictionary = Settings.get_value("names/pilots").duplicate()
 ## pilot -> { vector: bool, spheres: [{ radius_km, color }] } from the debug menus; kept when the
@@ -340,9 +342,10 @@ func _on_menu_logs_changed(path: String) -> void:
 
 ## Reads the open match's gamelogs (`MatchLibrary.log_paths`, also next to a CSV outside the
 ## library) into `data.combat_logs`, synced to it and attributed to its pilots (or as
-## `log_pilots` says).
+## `log_pilots` says), and shows the roster's combat columns that have data.
 func _load_combat_logs() -> void:
 	data.combat_logs = []
+	_apply_combat_stats()
 	var paths := MatchLibrary.log_paths(match_path)
 	if not paths.is_empty() and not data.has_eve_time():
 		print("  %d combat log(s) ignored: the CSV has no eve_time column" % paths.size())
@@ -355,6 +358,15 @@ func _load_combat_logs() -> void:
 		data.combat_logs.append(gamelog)
 		print("  log %s: %s -> %s, %d entries" % [file.get_file(), gamelog.listener,
 			gamelog.pilot if gamelog.pilot != "" else "(unattributed)", gamelog.entries.size()])
+	_apply_combat_stats()
+
+
+## Rebuilds `combat_stats` from `data.combat_logs`; roster columns without data are hidden.
+func _apply_combat_stats() -> void:
+	combat_stats = CombatStats.from_logs(data.combat_logs)
+	for id in CombatStats.RATE_IDS + CombatStats.EWAR_IDS:
+		roster_table.set_column_available(id, combat_stats.has(id))
+	_update_roster_cells()
 
 
 ## Saves this match's team swaps and names (and gamelog attributions), if it is in the library.
@@ -1840,12 +1852,19 @@ func _refresh_roster() -> void:
 	_update_roster_cells()
 
 
-## Refreshes each roster row's live columns: current hull, speed and distance from centre.
-## Pilots off grid show dashes; dead ones are dimmed.
+## Refreshes each roster row's live columns: current hull, speed, distance from centre, and the
+## combat-log rates and electronic warfare. Pilots off grid show dashes; dead ones are dimmed.
 func _update_roster_cells() -> void:
 	if data == null:
 		return
+	var rate_ids := CombatStats.RATE_IDS.filter(combat_stats.has)
 	for pilot in roster_buttons:
+		for id in rate_ids:
+			var r := combat_stats.rate(pilot, id, time)
+			roster_table.set_cell(pilot, id, "%d" % roundi(r) if r >= 0.5 else "—")
+		for id in CombatStats.EWAR_IDS:
+			if combat_stats.has(id):
+				roster_table.set_cell_icons(pilot, id, _ewar_icons(pilot, id == "ewar_out"))
 		var motion := _motion(pilot)
 		var dead: bool = time >= ships[pilot].death_t
 		if not motion.is_empty():
@@ -1857,6 +1876,23 @@ func _update_roster_cells() -> void:
 			roster_table.set_cell(pilot, "speed", "—" if is_nan(motion.speed) else _fmt_speed(motion.speed))
 			roster_table.set_cell(pilot, "distance", "%.1f km" % motion.dist_km)
 		roster_buttons[pilot].modulate.a = 0.5 if dead else 1.0
+
+
+## Roster icons for the electronic warfare on `pilot` (`outgoing`: by it) now: one per type, its
+## tooltip listing the pilots on the other side and the cycles so far.
+func _ewar_icons(pilot: String, outgoing: bool) -> Array:
+	var active := combat_stats.ewar_at(pilot, outgoing, time)
+	var items := []
+	for type in CombatStats.EWAR_TYPES:
+		if not active.has(type):
+			continue
+		var info: Dictionary = CombatStats.EWAR_TYPES[type]
+		var lines := ["%s %s:" % [info.title, "to" if outgoing else "from"]]
+		for row in active[type]:
+			lines.append("  %s (%d cycle%s)" % [_pilot_name(row.pilot), row.cycles, "" if row.cycles == 1 else "s"])
+		items.append({"key": type, "texture": assets.ewar_texture(type), "text": info.short,
+			"tooltip": "\n".join(lines)})
+	return items
 
 
 ## Roster abbreviation of a pilot name: the first word, then initials ("Ackbad Some Name" ->
