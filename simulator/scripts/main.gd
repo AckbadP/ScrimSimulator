@@ -65,6 +65,9 @@ const EVENT_NAMES := {
 	MatchData.Event.BOUNDARY: "Out of bounds",
 	MatchData.Event.MJD: "MJD",
 }
+## Audio further than this (s) from match time is re-seeked.
+const AUDIO_DRIFT_S := 0.15
+const AUDIO_BUS := "Match audio"
 ## Jumping to an event lands this many seconds before it, to see the lead-up.
 const EVENT_LEAD_S := 2.0
 ## A micro jump's take-off -> landing line stays up this long (match s) after the jump.
@@ -125,6 +128,10 @@ var beacon_ranges_centre: Node3D
 var vector_material: StandardMaterial3D
 
 var menu: MainMenu
+## Plays the match's audio (`MatchLibrary.load_audio`) in step with `time`, on `AUDIO_BUS`, whose
+## pitch shift undoes the pitch change of playing faster or slower.
+var audio_player: AudioStreamPlayer
+var audio_pitch: AudioEffectPitchShift
 var play_button: Button
 ## Big centred button shown over a freshly opened (paused) match; gone once playback first starts.
 var start_button: Button
@@ -186,6 +193,7 @@ func _ready() -> void:
 	_build_boundary()
 	ships_root = Node3D.new()
 	add_child(ships_root)
+	_build_audio()
 	_build_ui()
 	get_window().files_dropped.connect(_on_files_dropped)
 
@@ -221,7 +229,8 @@ static func _resolve_cli_path(path: String) -> String:
 
 ## Opens `path`, hiding the menu; false (and nothing changes) if it can't be read.
 func load_match(path: String) -> bool:
-	var d := MatchData.load_csv(path, sizes.radii(), _move_threshold_m())
+	var has_audio := MatchLibrary.contains(path) and MatchLibrary.audio_path(path) != ""
+	var d := MatchData.load_csv(path, sizes.radii(), _move_threshold_m(), has_audio)
 	if d == null:
 		file_label.text = "Failed to load %s" % path.get_file()
 		return false
@@ -238,6 +247,8 @@ func load_match(path: String) -> bool:
 		if data.teams.has(pilot):
 			data.teams[pilot] = team_overrides[pilot]
 	match_path = path
+	audio_player.stop()
+	audio_player.stream = MatchLibrary.load_audio(path) if has_audio else null
 	for c in ships_root.get_children():
 		c.queue_free()
 	ships.clear()
@@ -282,6 +293,15 @@ func _on_menu_match_renamed(old_path: String, new_path: String) -> void:
 	if old_path == match_path:
 		match_path = new_path
 		_update_file_label()
+
+
+## A library match's audio changed: the open one reloads, as its start (time 0) moves with it.
+func _on_menu_audio_changed(path: String) -> void:
+	if path != match_path or data == null:
+		return
+	var in_menu: bool = menu.visible
+	load_match(path)
+	menu.visible = in_menu
 
 
 ## Saves this match's team swaps and names, if it is in the library.
@@ -415,6 +435,10 @@ func _process(delta: float) -> void:
 		if time >= data.duration:
 			time = data.duration
 			_set_playing(false)
+		elif audio_player.playing:
+			var heard := audio_player.get_playback_position() + AudioServer.get_time_since_last_mix() * speed
+			if absf(heard - time) > AUDIO_DRIFT_S * maxf(speed, 1.0):
+				audio_player.seek(time)
 	_update_ships()
 	_update_vectors()
 	_update_mjd_trails()
@@ -1036,6 +1060,7 @@ func _seek(t: float) -> void:
 		return
 	time = clampf(t, 0.0, data.duration)
 	timeline.set_value_no_signal(time)
+	_sync_audio()
 
 
 ## Pauses and moves to the next (`dir` 1) or previous (-1) whole tick.
@@ -1058,6 +1083,24 @@ func _set_playing(p: bool) -> void:
 	if p:
 		start_button.visible = false
 	play_button.text = "Pause" if p else "Play"
+	_sync_audio()
+
+
+## Starts the match audio at `time` while playing (and not scrubbing), else stops it.
+func _sync_audio() -> void:
+	if audio_player == null or audio_player.stream == null:
+		return
+	if playing and not _scrubbing and time < audio_player.stream.get_length():
+		audio_player.play(time)
+	else:
+		audio_player.stop()
+
+
+## Plays the match audio `speed` times faster without changing its pitch.
+func _set_speed(s: float) -> void:
+	speed = s
+	audio_player.pitch_scale = s
+	audio_pitch.pitch_scale = 1.0 / s
 
 
 static func _fmt_time(t: float) -> String:
@@ -1267,7 +1310,7 @@ func _build_ui() -> void:
 	for s in SPEEDS:
 		speed_option.add_item("%sx" % s)
 	speed_option.select(SPEEDS.find(1.0))
-	speed_option.item_selected.connect(func(idx): speed = SPEEDS[idx])
+	speed_option.item_selected.connect(func(idx): _set_speed(SPEEDS[idx]))
 	row.add_child(speed_option)
 
 	time_label = Label.new()
@@ -1311,8 +1354,12 @@ func _build_ui() -> void:
 	timeline.step = 0.0
 	timeline.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	timeline.value_changed.connect(_seek)
-	timeline.drag_started.connect(func(): _scrubbing = true)
-	timeline.drag_ended.connect(func(_changed): _scrubbing = false)
+	timeline.drag_started.connect(func():
+		_scrubbing = true
+		_sync_audio())
+	timeline.drag_ended.connect(func(_changed):
+		_scrubbing = false
+		_sync_audio())
 	box.add_child(timeline)
 	event_strip.slider = timeline
 
@@ -1366,7 +1413,22 @@ func _build_ui() -> void:
 	menu.match_chosen.connect(_on_menu_match_chosen)
 	menu.resumed.connect(func(): menu.visible = false)
 	menu.match_renamed.connect(_on_menu_match_renamed)
+	menu.audio_changed.connect(_on_menu_audio_changed)
 	menu_layer.add_child(menu)
+
+
+func _build_audio() -> void:
+	var bus := AudioServer.get_bus_index(AUDIO_BUS)
+	if bus < 0:
+		AudioServer.add_bus()
+		bus = AudioServer.bus_count - 1
+		AudioServer.set_bus_name(bus, AUDIO_BUS)
+		AudioServer.add_bus_effect(bus, AudioEffectPitchShift.new())
+	audio_pitch = AudioServer.get_bus_effect(bus, 0)
+	audio_pitch.pitch_scale = 1.0
+	audio_player = AudioStreamPlayer.new()
+	audio_player.bus = AUDIO_BUS
+	add_child(audio_player)
 
 
 func _build_settings(layer: CanvasLayer) -> void:
@@ -1634,10 +1696,19 @@ func _rename_team(team: int, new_name: String) -> void:
 	_update_info()
 
 
-## A dropped CSV joins the library and opens (from the menu or mid-match).
+## A dropped CSV joins the library and opens (from the menu or mid-match); a dropped audio file
+## becomes the audio of the selected match (menu) or the open library match.
 func _on_files_dropped(files: PackedStringArray) -> void:
 	for f in files:
-		if f.get_extension().to_lower() == "csv":
+		var ext := f.get_extension().to_lower()
+		if ext == "csv":
 			_show_menu()
 			menu.add_file(f)
+			return
+		if MatchLibrary.AUDIO_EXTENSIONS.has(ext):
+			if menu.visible:
+				menu.add_audio(f)
+			elif MatchLibrary.contains(match_path):
+				if MatchLibrary.set_audio(match_path, f) != "":
+					load_match(match_path)
 			return

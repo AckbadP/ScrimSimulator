@@ -135,3 +135,57 @@ func test_contains() -> void:
 	assert_true(MatchLibrary.contains(path))
 	assert_false(MatchLibrary.contains(temp_dir().path_join("m.csv")))
 	assert_false(MatchLibrary.contains(""))
+
+
+func test_set_audio_copies_next_to_csv() -> void:
+	var path := MatchLibrary.add(_file("m.positions.csv", "1"))
+	assert_eq(MatchLibrary.audio_path(path), "")
+	assert_false(MatchLibrary.list()[0].audio)
+	var src := write_wav()
+	var audio := MatchLibrary.set_audio(path, src)
+	assert_eq(audio, MatchLibrary.dir.path_join("m.positions.wav"))
+	assert_eq(MatchLibrary.audio_path(path), audio)
+	assert_true(MatchLibrary.list()[0].audio)
+	assert_eq(MatchLibrary.list().size(), 1, "audio isn't listed as a match")
+	DirAccess.remove_absolute(src)
+	assert_true(MatchLibrary.load_audio(path) is AudioStreamWAV, "copy outlives the original")
+
+
+func test_set_audio_replaces_other_format() -> void:
+	var path := MatchLibrary.add(_file("m.positions.csv", "1"))
+	MatchLibrary.set_audio(path, write_wav())
+	var ogg := MatchLibrary.set_audio(path, _file("comms.OGG", "not really ogg"))
+	assert_eq(ogg, MatchLibrary.dir.path_join("m.positions.ogg"))
+	assert_false(FileAccess.file_exists(MatchLibrary.dir.path_join("m.positions.wav")))
+	assert_eq(MatchLibrary.audio_path(path), ogg)
+
+
+func test_set_audio_rejects_other_files() -> void:
+	var path := MatchLibrary.add(_file("m.positions.csv", "1"))
+	assert_eq(MatchLibrary.set_audio(path, _file("notes.txt", "x")), "")
+	assert_eq(MatchLibrary.set_audio(path, temp_dir().path_join("missing.wav")), "")
+	assert_eq(MatchLibrary.audio_path(path), "")
+	assert_null(MatchLibrary.load_audio(path))
+
+
+func test_remove_audio() -> void:
+	var path := MatchLibrary.add(_file("m.positions.csv", "1"))
+	MatchLibrary.set_audio(path, write_wav())
+	MatchLibrary.remove_audio(path)
+	assert_eq(MatchLibrary.audio_path(path), "")
+	assert_true(FileAccess.file_exists(path), "match stays")
+
+
+func test_rename_moves_audio() -> void:
+	var path := MatchLibrary.add(_file("m.positions.csv", "1"))
+	MatchLibrary.set_audio(path, write_wav())
+	var renamed := MatchLibrary.rename(path, "n")
+	assert_eq(MatchLibrary.audio_path(renamed), MatchLibrary.dir.path_join("n.positions.wav"))
+	assert_eq(MatchLibrary.audio_path(path), "")
+
+
+func test_remove_deletes_audio() -> void:
+	var path := MatchLibrary.add(_file("m.positions.csv", "1"))
+	var audio := MatchLibrary.set_audio(path, write_wav())
+	MatchLibrary.remove(path)
+	assert_false(FileAccess.file_exists(audio))

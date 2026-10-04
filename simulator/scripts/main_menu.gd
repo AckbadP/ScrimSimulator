@@ -1,7 +1,8 @@
 class_name MainMenu
 extends PanelContainer
 ## Full-screen start menu: pick a match from the `MatchLibrary`, add a new CSV to it, rename or
-## remove one. Covers the viewer until a match is chosen.
+## remove one, attach audio to one (right-click for all of these). Covers the viewer until a
+## match is chosen.
 
 ## The library path of the match to open.
 signal match_chosen(path: String)
@@ -9,17 +10,34 @@ signal match_chosen(path: String)
 signal resumed
 ## A library match was renamed (its file moved from `old_path` to `new_path`).
 signal match_renamed(old_path: String, new_path: String)
+## Library match `path` got, lost or replaced its audio file.
+signal audio_changed(path: String)
+
+enum MenuItem { ADD_AUDIO, REMOVE_AUDIO, RENAME, REMOVE }
+
+## Badge on matches with audio: a speaker.
+const AUDIO_ICON_SVG := """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+<path d="M2 6h3l4-3.5v11L5 10H2z" fill="#8fc3ff"/>
+<path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.5a6 6 0 0 1 0 9" stroke="#8fc3ff" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+</svg>"""
 
 var list: ItemList
 var open_button: Button
 var rename_button: Button
 var remove_button: Button
+var audio_button: Button
 var resume_button: Button
 var error_label: Label
 var empty_label: Label
 var add_dialog: FileDialog
 var remove_dialog: ConfirmationDialog
 var rename_dialog: RenameDialog
+var audio_dialog: FileDialog
+## Right-click menu of a match (`MenuItem` ids).
+var context_menu: PopupMenu
+var audio_icon: Texture2D
+## Same size as `audio_icon`, for matches without audio so names stay aligned.
+var blank_icon: Texture2D
 ## Library entries in `list` order (see `MatchLibrary.list`).
 var entries: Array = []
 
@@ -52,6 +70,8 @@ func _init() -> void:
 	list.custom_minimum_size = Vector2(0, 320)
 	list.item_activated.connect(func(_i): _open_selected())
 	list.item_selected.connect(func(_i): _update_buttons())
+	list.item_clicked.connect(_on_item_clicked)
+	list.allow_rmb_select = true
 	box.add_child(list)
 
 	empty_label = Label.new()
@@ -89,6 +109,12 @@ func _init() -> void:
 	remove_button.pressed.connect(_confirm_remove)
 	buttons.add_child(remove_button)
 
+	audio_button = Button.new()
+	audio_button.text = "Add audio…"
+	audio_button.tooltip_text = "Attach an audio file (ogg, mp3, wav) that starts with the match data"
+	audio_button.pressed.connect(_ask_audio)
+	buttons.add_child(audio_button)
+
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	buttons.add_child(spacer)
@@ -117,6 +143,24 @@ func _init() -> void:
 	rename_dialog.submitted.connect(rename_selected)
 	add_child(rename_dialog)
 
+	audio_dialog = FileDialog.new()
+	audio_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	audio_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	audio_dialog.filters = PackedStringArray(["*.ogg, *.mp3, *.wav ; Audio files"])
+	audio_dialog.use_native_dialog = true
+	audio_dialog.file_selected.connect(add_audio)
+	add_child(audio_dialog)
+
+	context_menu = PopupMenu.new()
+	context_menu.id_pressed.connect(_on_context_item)
+	add_child(context_menu)
+
+	var img := Image.new()
+	img.load_svg_from_string(AUDIO_ICON_SVG)
+	audio_icon = ImageTexture.create_from_image(img)
+	var blank := Image.create_empty(img.get_width(), img.get_height(), false, Image.FORMAT_RGBA8)
+	blank_icon = ImageTexture.create_from_image(blank)
+
 	refresh()
 
 
@@ -126,7 +170,9 @@ func refresh() -> void:
 	entries = MatchLibrary.list()
 	list.clear()
 	for e in entries:
-		list.add_item("%s — %s" % [e.name, _fmt_date(e.modified)])
+		list.add_item("%s — %s" % [e.name, _fmt_date(e.modified)], audio_icon if e.audio else blank_icon)
+		if e.audio:
+			list.set_item_tooltip(list.item_count - 1, "Has audio")
 		if e.path == was:
 			list.select(list.item_count - 1)
 	if not list.is_anything_selected() and list.item_count > 0:
@@ -155,6 +201,29 @@ func add_file(src: String) -> void:
 	match_chosen.emit(path)
 
 
+## Copies audio file `src` into the library as the selected match's audio.
+func add_audio(src: String) -> void:
+	var path := selected_path()
+	if path == "":
+		return
+	if MatchLibrary.set_audio(path, src) == "":
+		show_error("Failed to add audio %s — use an ogg, mp3 or wav file" % src.get_file())
+		return
+	show_error("")
+	refresh()
+	audio_changed.emit(path)
+
+
+## Deletes the selected match's audio file.
+func remove_audio_selected() -> void:
+	var path := selected_path()
+	if path == "" or MatchLibrary.audio_path(path) == "":
+		return
+	MatchLibrary.remove_audio(path)
+	refresh()
+	audio_changed.emit(path)
+
+
 ## The selected match's library path, or "".
 func selected_path() -> String:
 	if list == null:
@@ -170,11 +239,54 @@ func _open_selected() -> void:
 		match_chosen.emit(path)
 
 
+func _ask_audio() -> void:
+	if selected_path() != "":
+		audio_dialog.popup_centered_ratio(0.6)
+
+
+## Right-click: select the match and show its menu at the mouse.
+func _on_item_clicked(index: int, at: Vector2, button: int) -> void:
+	if button != MOUSE_BUTTON_RIGHT:
+		return
+	list.select(index)
+	_update_buttons()
+	open_context_menu(list.get_screen_position() + at)
+
+
+## Shows the selected match's right-click menu at screen position `at`.
+func open_context_menu(at: Vector2) -> void:
+	var path := selected_path()
+	if path == "":
+		return
+	var has_audio := MatchLibrary.audio_path(path) != ""
+	context_menu.clear()
+	context_menu.add_item("Replace audio…" if has_audio else "Add audio…", MenuItem.ADD_AUDIO)
+	context_menu.add_item("Remove audio", MenuItem.REMOVE_AUDIO)
+	context_menu.set_item_disabled(context_menu.get_item_index(MenuItem.REMOVE_AUDIO), not has_audio)
+	context_menu.add_separator()
+	context_menu.add_item("Rename…", MenuItem.RENAME)
+	context_menu.add_item("Remove match…", MenuItem.REMOVE)
+	context_menu.reset_size()
+	context_menu.popup(Rect2i(Vector2i(at), Vector2i.ZERO))
+
+
+func _on_context_item(id: int) -> void:
+	match id:
+		MenuItem.ADD_AUDIO:
+			_ask_audio()
+		MenuItem.REMOVE_AUDIO:
+			remove_audio_selected()
+		MenuItem.RENAME:
+			_ask_rename()
+		MenuItem.REMOVE:
+			_confirm_remove()
+
+
 func _confirm_remove() -> void:
 	var sel := list.get_selected_items()
 	if sel.is_empty():
 		return
-	remove_dialog.dialog_text = "Remove %s from the match list?\nThe copied CSV is deleted; the original file is not touched." % entries[sel[0]].name
+	remove_dialog.dialog_text = "Remove %s from the match list?\nThe copied CSV (and its audio) is deleted; the original files are not touched." % entries[sel[0]].name
 	remove_dialog.popup_centered()
 
 
@@ -216,6 +328,8 @@ func _update_buttons() -> void:
 	open_button.disabled = not any
 	rename_button.disabled = not any
 	remove_button.disabled = not any
+	audio_button.disabled = not any
+	audio_button.text = "Replace audio…" if any and MatchLibrary.audio_path(selected_path()) != "" else "Add audio…"
 
 
 ## Unix time -> local "yyyy-mm-dd hh:mm".

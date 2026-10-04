@@ -42,6 +42,33 @@ func write_csv(rows: Array, header := DEFAULT_HEADER) -> String:
 	return path
 
 
+## Writes `seconds` of silent 8 kHz 8-bit mono WAV to a temp file named `name` and returns its path.
+func write_wav(seconds := 1.0, name := "comms.wav") -> String:
+	var samples := int(8000 * seconds)
+	var b := StreamPeerBuffer.new()
+	b.put_data("RIFF".to_ascii_buffer())
+	b.put_u32(36 + samples)
+	b.put_data("WAVEfmt ".to_ascii_buffer())
+	b.put_u32(16)
+	b.put_u16(1)  # PCM
+	b.put_u16(1)  # mono
+	b.put_u32(8000)  # sample rate
+	b.put_u32(8000)  # byte rate
+	b.put_u16(1)  # block align
+	b.put_u16(8)  # bits per sample
+	b.put_data("data".to_ascii_buffer())
+	b.put_u32(samples)
+	var silence := PackedByteArray()
+	silence.resize(samples)
+	silence.fill(128)
+	b.put_data(silence)
+	var path := temp_dir().path_join(name)
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(b.data_array)
+	f.close()
+	return path
+
+
 ## A `scrim-positions` row with only the columns the simulator reads filled in.
 static func row(t: float, pilot: String, ship_type: String, pos: Vector3) -> Array:
 	return [t, pilot, ship_type, pos.x, pos.y, pos.z, 0, 0, 0, 0, 0]
