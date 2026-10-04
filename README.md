@@ -45,9 +45,13 @@ time a match needs it. The gallery's GLBs are Draco-compressed, which Godot can'
 found, ships fall back to spheres.
 
 You can also load a CSV with the **Open CSV…** button, or by dropping the file onto the window.
-Controls: Space plays/pauses, ←/→ seek 10 s, the slider scrubs. Left drag orbits the camera,
+Resizing the window shows more of the arena; the UI size is set by **Interface scale** in Settings.
+Matches open paused; press Start (or Space/Play) to begin. Controls: Space plays/pauses, ←/→ pause and step one tick (1 s), the slider scrubs. Left drag orbits the camera,
 the wheel zooms, and right drag pans. Click a ship to select it (its details show top left; Esc
 or clicking empty space clears it), double-click it to follow it with the camera.
+Right-click a ship (in space or in the roster) for its debug menu: a movement vector and any
+number of range spheres. **Debug…** (or D) does the same for every ship at once, sets how far
+ahead vectors project (default 3 s), and shows the beacons' 5 km jump range.
 
 ### Tests
 

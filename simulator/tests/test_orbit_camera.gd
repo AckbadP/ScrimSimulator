@@ -52,6 +52,15 @@ func test_wheel_zooms_within_limits() -> void:
 	assert_eq(cam.distance, OrbitCamera.MAX_DISTANCE)
 
 
+func test_fov_grows_with_viewport_height() -> void:
+	assert_almost(OrbitCamera.fov_for_height(OrbitCamera.REF_HEIGHT), OrbitCamera.BASE_FOV)
+	assert_true(OrbitCamera.fov_for_height(900.0) > OrbitCamera.BASE_FOV, "taller shows more")
+	assert_true(OrbitCamera.fov_for_height(400.0) < OrbitCamera.BASE_FOV, "shorter shows less")
+	assert_eq(OrbitCamera.fov_for_height(100000.0), OrbitCamera.MAX_FOV)
+	var cam := _camera()
+	assert_almost(cam.fov, OrbitCamera.fov_for_height(cam.get_viewport().get_visible_rect().size.y))
+
+
 func test_drag_rotates_and_clamps_pitch() -> void:
 	var cam := _camera()
 	var yaw: float = cam.yaw

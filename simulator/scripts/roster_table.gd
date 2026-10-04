@@ -8,6 +8,8 @@ extends VBoxContainer
 
 signal row_pressed(pilot: String)
 signal swap_pressed(pilot: String)
+## A pilot row was right-clicked.
+signal row_context_pressed(pilot: String)
 ## Column widths, order or visibility changed.
 signal layout_changed
 
@@ -210,8 +212,8 @@ func add_group(text: String, color: Color) -> Label:
 	return label
 
 
-## A pilot row: a toggle button spanning the cells, then a team swap button. Returns the row
-## button.
+## A pilot row: a toggle button spanning the cells (right-click: `row_context_pressed`), then a
+## team swap button. Returns the row button.
 func add_row(pilot: String, color: Color, swap_tooltip: String) -> Button:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 0)
@@ -221,6 +223,10 @@ func add_row(pilot: String, color: Color, swap_tooltip: String) -> Button:
 	button.flat = true
 	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(func(): row_pressed.emit(pilot))
+	button.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+			row_context_pressed.emit(pilot)
+			button.accept_event())
 	row.add_child(button)
 	var cells := HBoxContainer.new()
 	cells.add_theme_constant_override("separation", int(HANDLE_W))
@@ -276,7 +282,7 @@ func _apply_layout() -> void:
 	for c in columns:
 		if not c.visible:
 			continue
-		var label := _cell(COLUMNS[c.id].align)
+		var label := _cell(HORIZONTAL_ALIGNMENT_CENTER)
 		label.text = COLUMNS[c.id].title
 		label.custom_minimum_size.x = c.width
 		label.modulate = Color(1, 1, 1, 0.7)

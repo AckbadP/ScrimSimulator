@@ -199,6 +199,7 @@ func _viewer() -> Main:
 			"name": hull, "type_id": 0, "group_id": 0, "radius_m": HULL_RADII[hull],
 		}
 	m.load_match(demo_path())
+	m.start_button.pressed.emit()
 	return m
 
 
