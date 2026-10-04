@@ -180,6 +180,20 @@ impl Decoder {
         start_s: f64,
         end_s: Option<f64>,
     ) -> Result<Decoder> {
+        Decoder::open_range_hw(path, fps, start_s, end_s, None)
+    }
+
+    /// Like [`Decoder::open_range`], decoding with ffmpeg's `-hwaccel <hwaccel>` (e.g. `cuda` for
+    /// NVDEC, `vaapi`). The decoded pixels are the same; what changes is that decode no longer
+    /// competes with OCR for CPU cores. ffmpeg falls back to software decode by itself when the
+    /// accelerator can't be initialised.
+    pub fn open_range_hw(
+        path: impl AsRef<std::path::Path>,
+        fps: Option<f64>,
+        start_s: f64,
+        end_s: Option<f64>,
+        hwaccel: Option<&str>,
+    ) -> Result<Decoder> {
         let path = path.as_ref();
         let (width, height, src_fps) = probe(path)?;
         if let Some(f) = fps {
@@ -192,6 +206,9 @@ impl Decoder {
 
         let mut cmd = Command::new("ffmpeg");
         cmd.args(["-v", "error"]);
+        if let Some(hw) = hwaccel {
+            cmd.args(["-hwaccel", hw]);
+        }
         if start_s > 0.0 {
             cmd.args(["-ss", &format!("{start_s}")]);
         }
@@ -261,6 +278,48 @@ impl Decoder {
     }
 }
 
+impl Decoder {
+    /// Move decoding onto its own thread, keeping up to `depth` decoded frames queued ahead of the
+    /// consumer — so ffmpeg keeps decoding while the caller is busy with the previous frames
+    /// instead of stalling on a full stdout pipe.
+    pub fn prefetch(mut self, depth: usize) -> Prefetch {
+        let (width, height, fps) = (self.width, self.height, self.fps);
+        let (tx, rx) = std::sync::mpsc::sync_channel(depth);
+        std::thread::spawn(move || loop {
+            let next = self.next_frame();
+            let stop = !matches!(next, Ok(Some(_)));
+            // A send error means the consumer is gone; dropping `self` then stops ffmpeg.
+            if tx.send(next).is_err() || stop {
+                break;
+            }
+        });
+        Prefetch { width, height, fps, rx, done: false }
+    }
+}
+
+/// A [`Decoder`] running on a background thread (see [`Decoder::prefetch`]).
+pub struct Prefetch {
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    rx: std::sync::mpsc::Receiver<Result<Option<Frame>>>,
+    done: bool,
+}
+
+impl Prefetch {
+    /// Read the next frame, or `None` at end of stream.
+    pub fn next_frame(&mut self) -> Result<Option<Frame>> {
+        if self.done {
+            return Ok(None);
+        }
+        let next = self.rx.recv().unwrap_or(Ok(None));
+        if !matches!(next, Ok(Some(_))) {
+            self.done = true;
+        }
+        next
+    }
+}
+
 impl Iterator for Decoder {
     type Item = Result<Frame>;
 
@@ -290,6 +349,21 @@ mod tests {
 
     /// The overview crate's sample recording, decoded whole and as a sub-range.
     const SAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../overview/tests/fixtures/overview-sample.mkv");
+
+    #[test]
+    fn prefetch_yields_the_same_frames() {
+        let direct: Vec<Frame> =
+            Decoder::open_with_fps(SAMPLE, Some(2.0)).unwrap().map(Result::unwrap).collect();
+        let mut pre = Decoder::open_with_fps(SAMPLE, Some(2.0)).unwrap().prefetch(2);
+        let mut n = 0;
+        while let Some(f) = pre.next_frame().unwrap() {
+            assert_eq!(f.index, direct[n].index);
+            assert!(f.image == direct[n].image);
+            n += 1;
+        }
+        assert_eq!(n, direct.len());
+        assert!(pre.next_frame().unwrap().is_none());
+    }
 
     #[test]
     fn range_decodes_only_the_window() {
