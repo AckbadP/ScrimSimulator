@@ -938,6 +938,74 @@ func test_double_click_follows() -> void:
 	assert_eq(m.tracked, "blue", "double-clicking empty space doesn't drop the follow")
 
 
+func _move(m: Main, pos: Vector2) -> void:
+	var ev := InputEventMouseMotion.new()
+	ev.position = pos
+	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	m._unhandled_input(ev)
+
+
+func test_drag_from_ship_measures() -> void:
+	var m := _select_main()
+	var pos := _screen(m, "blue")
+	_mouse(m, pos, true)
+	assert_true(m.camera.rotate_locked, "press on a ship locks camera rotation")
+	_move(m, pos + Vector2(2, 0))
+	assert_false(m.measure_root.visible, "within the click slop")
+	_move(m, pos + Vector2(80, 0))
+	assert_true(m.measure_root.visible)
+	assert_true(m.measure_label.visible)
+	assert_true(m.measure_label.text.begins_with("r "))
+	var r: float = m.measure_root.scale.x
+	assert_true(r > 0.0)
+	assert_almost(m.measure_root.position, m.ships["blue"].node.position)
+	_move(m, pos + Vector2(160, 0))
+	assert_true(m.measure_root.scale.x > r, "grows as the drag goes further")
+	_mouse(m, pos, false)
+	assert_eq(m.selected, "", "a measuring drag selects nothing")
+	assert_false(m.measure_root.visible, "gone on release")
+	assert_false(m.measure_label.visible)
+	assert_false(m.camera.rotate_locked)
+
+
+func test_measure_snaps_to_ship_and_brackets_it() -> void:
+	var m := _select_main()
+	_mouse(m, _screen(m, "blue"), true)
+	_move(m, _screen(m, "blue") + Vector2(40, 40))
+	assert_false(m.ships["runner"].measure_icon.visible)
+	_move(m, _screen(m, "runner"))
+	var o: Vector3 = m.ships["blue"].node.position
+	var d := o.distance_to(m.ships["runner"].node.position)
+	var rb: float = m.ships["blue"].radius
+	var rr: float = m.ships["runner"].radius
+	assert_almost(m.measure_root.scale.x, d - rr)
+	assert_true(m.measure_label.text.begins_with(Main._fmt_km_m(d - rb - rr)))
+	assert_true(m.ships["runner"].measure_icon.visible, "snapped ship is inside")
+	assert_false(m.ships["blue"].measure_icon.visible, "origin isn't bracketed")
+	_mouse(m, _screen(m, "runner"), false)
+	assert_false(m.ships["runner"].measure_icon.visible)
+
+
+func test_press_on_empty_space_does_not_measure() -> void:
+	var m := _select_main()
+	var pos := _empty_spot(m)
+	_mouse(m, pos, true)
+	assert_false(m.camera.rotate_locked)
+	_move(m, pos + Vector2(80, 80))
+	assert_false(m.measure_root.visible)
+	_mouse(m, pos + Vector2(80, 80), false)
+
+
+func test_in_sphere_and_fmt_km_m() -> void:
+	assert_true(Main._in_sphere(10.0, 0.0, 10.0), "touching counts")
+	assert_true(Main._in_sphere(10.5, 0.5, 10.0), "hull reaches in")
+	assert_false(Main._in_sphere(10.5, 0.4, 10.0))
+	assert_eq(Main._fmt_km_m(0.85), "850 m")
+	assert_eq(Main._fmt_km_m(12.3451), "12.345 km")
+	assert_eq(Main._fmt_km_m(1.0), "1.000 km")
+	assert_eq(Main._fmt_km_m(0.9996), "1.000 km")
+
+
 func test_info_shows_death() -> void:
 	var m := _select_main()
 	_click(m, _screen(m, "runner"))
