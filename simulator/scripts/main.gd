@@ -2024,10 +2024,15 @@ func _rename_team(team: int, new_name: String) -> void:
 	_update_info()
 
 
-## A dropped CSV joins the library and opens (from the menu or mid-match); a dropped audio file
-## becomes the audio of the selected match (menu) or the open library match.
+## A dropped CSV joins the library and opens (from the menu or mid-match); a dropped folder
+## joins it as a scrim folder (`MainMenu.add_folder`); a dropped audio file becomes the audio of
+## the selected match (menu) or the open library match.
 func _on_files_dropped(files: PackedStringArray) -> void:
 	for f in files:
+		if DirAccess.dir_exists_absolute(f):
+			_show_menu()
+			menu.add_folder(f)
+			return
 		var ext := f.get_extension().to_lower()
 		if ext == "csv":
 			_show_menu()

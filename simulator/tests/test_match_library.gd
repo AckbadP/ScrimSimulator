@@ -308,3 +308,115 @@ func test_missing_demo_is_noop() -> void:
 	MatchLibrary.add_demo()
 	assert_eq(MatchLibrary.list(), [])
 	assert_false(Settings.get_value("library/demo_added"), "a later run can still add it")
+
+
+func test_folders_list_nested_and_skip_logs() -> void:
+	assert_eq(MatchLibrary.create_folder("", "b"), "b")
+	assert_eq(MatchLibrary.create_folder("", "A"), "A")
+	assert_eq(MatchLibrary.create_folder("A", "x"), "A/x")
+	var path := MatchLibrary.add(_match_file(), "A/x")
+	MatchLibrary.add_log(path, _gamelog("g.txt"))
+	assert_eq(MatchLibrary.folders(), ["A", "A/x", "b"])
+	assert_eq(MatchLibrary.list().map(func(e): return e.folder), ["A/x"])
+	assert_eq(MatchLibrary.folder_of(path), "A/x")
+	assert_eq(MatchLibrary.matches_in("A"), [path])
+	assert_eq(MatchLibrary.matches_in("b"), [])
+
+
+func test_create_folder_rejects_bad_names() -> void:
+	MatchLibrary.create_folder("", "a")
+	assert_eq(MatchLibrary.create_folder("", "A"), "", "taken, ignoring case")
+	assert_eq(MatchLibrary.create_folder("", "  "), "")
+	assert_eq(MatchLibrary.create_folder("", "m.logs"), "")
+	assert_eq(MatchLibrary.create_folder("", ".."), "")
+	assert_eq(MatchLibrary.create_folder("a", "a"), "a/a", "same name elsewhere is fine")
+
+
+func test_contains_nested() -> void:
+	MatchLibrary.create_folder("", "f")
+	var path := MatchLibrary.add(_file("m.csv", "1"), "f")
+	assert_eq(path, MatchLibrary.dir.path_join("f/m.csv"))
+	assert_true(MatchLibrary.contains(path))
+	assert_false(MatchLibrary.contains(MatchLibrary.dir.path_join("f/m.logs/x.txt")))
+
+
+func test_move_carries_companions_and_suffixes() -> void:
+	MatchLibrary.create_folder("", "f")
+	var path := MatchLibrary.add(_match_file())
+	MatchLibrary.save_meta(path, {"teams": {}})
+	MatchLibrary.set_audio(path, write_wav())
+	MatchLibrary.add_log(path, _gamelog("g.txt"))
+	var moved := MatchLibrary.move(path, "f")
+	assert_eq(moved, MatchLibrary.dir.path_join("f/m.positions.csv"))
+	assert_false(FileAccess.file_exists(path))
+	assert_true(FileAccess.file_exists(MatchLibrary.meta_path(moved)))
+	assert_ne(MatchLibrary.audio_path(moved), "")
+	assert_eq(MatchLibrary.log_paths(moved).size(), 1)
+	assert_eq(MatchLibrary.move(moved, "f"), moved, "already there")
+	var other := MatchLibrary.add(_file("m.positions.csv", "other"))
+	assert_eq(MatchLibrary.move(other, "f").get_file(), "m (2).positions.csv")
+	assert_eq(MatchLibrary.move(moved, "nope"), "")
+
+
+func test_rename_clash_is_per_folder() -> void:
+	MatchLibrary.create_folder("", "f")
+	MatchLibrary.add(_file("a.csv", "1"))
+	var b := MatchLibrary.add(_file("b.csv", "2"), "f")
+	assert_eq(MatchLibrary.rename(b, "a"), MatchLibrary.dir.path_join("f/a.csv"))
+
+
+func test_rename_move_and_remove_folder() -> void:
+	MatchLibrary.create_folder("", "a")
+	MatchLibrary.create_folder("a", "b")
+	MatchLibrary.create_folder("", "c")
+	var path := MatchLibrary.add(_file("m.csv", "1"), "a/b")
+	assert_eq(MatchLibrary.rename_folder("a", "c"), "", "taken")
+	assert_eq(MatchLibrary.rename_folder("a", "z"), "z")
+	assert_eq(MatchLibrary.matches_in("z"), [MatchLibrary.dir.path_join("z/b/m.csv")])
+	assert_eq(MatchLibrary.move_folder("z", "z/b"), "", "not into itself")
+	assert_eq(MatchLibrary.move_folder("z/b", "c"), "c/b")
+	MatchLibrary.create_folder("", "b")
+	assert_eq(MatchLibrary.move_folder("c/b", ""), "b (2)", "name taken there")
+	assert_eq(MatchLibrary.list().size(), 1)
+	MatchLibrary.remove_folder("b (2)")
+	assert_eq(MatchLibrary.list(), [])
+	assert_eq(MatchLibrary.folders(), ["b", "c", "z"])
+	assert_false(FileAccess.file_exists(path))
+
+
+func test_pair_audio() -> void:
+	var pairs := MatchLibrary.pair_audio(
+		["d/match_03.positions.csv", "d/clip_001.positions.csv", "d/x_2.csv", "d/y_2.csv", "d/lone.csv"],
+		["d/Match_03.ogg", "d/match_1.mp3", "d/comms_2.wav", "d/extra.mp3"])
+	assert_eq(pairs, {
+		"d/match_03.positions.csv": "d/Match_03.ogg",
+		"d/clip_001.positions.csv": "d/match_1.mp3",
+	}, "exact name, then a unique trailing number; 2 is ambiguous")
+	assert_eq(MatchLibrary.pair_audio(["d/a_1.csv"], ["d/a_1.wav", "d/b_1.wav"]), {"d/a_1.csv": "d/a_1.wav"},
+		"exact name wins over numbers")
+
+
+func test_add_folder_pairs_audio_and_logs() -> void:
+	var src := temp_dir().path_join("vs X")
+	DirAccess.make_dir_recursive_absolute(src)
+	DirAccess.copy_absolute(_match_file(), src.path_join("clip_001.positions.csv"))
+	DirAccess.copy_absolute(write_wav(), src.path_join("match_001.wav"))
+	DirAccess.copy_absolute(write_wav(), src.path_join("stray.wav"))
+	DirAccess.copy_absolute(_gamelog("g.txt"), src.path_join("g.txt"))
+	DirAccess.copy_absolute(_gamelog("late.txt", 59), src.path_join("late.txt"))
+	MatchLibrary.create_folder("", "Season")
+	var added := MatchLibrary.add_folder(src, "Season")
+	assert_eq(added.folder, "Season/vs X")
+	var path := MatchLibrary.dir.path_join("Season/vs X/clip_001.positions.csv")
+	assert_eq(added.matches, [path])
+	assert_eq(added.unpaired_audio, ["stray.wav"])
+	assert_ne(MatchLibrary.audio_path(path), "")
+	assert_eq(MatchLibrary.log_paths(path).map(func(p): return p.get_file()), ["g.txt"], "only logs with combat in the match")
+	assert_eq(MatchLibrary.add_folder(src, "Season").matches, [path], "importing again changes nothing")
+	assert_eq(MatchLibrary.list().size(), 1)
+
+
+func test_add_folder_without_csvs() -> void:
+	var added := MatchLibrary.add_folder(temp_dir())
+	assert_eq(added.matches, [])
+	assert_eq(MatchLibrary.folders(), [])
