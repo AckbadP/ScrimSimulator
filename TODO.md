@@ -5,6 +5,7 @@
 ## Position pipeline (crates)
 - may bug when ship comes close enough that distance becomes m instead of km
 - output exact eve time of each tick so it can be more easilly synced with other data
+- bug where some ships seem to be moved out of bounds errouniously
 
 ## Test data (resouces)
 
