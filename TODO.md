@@ -28,3 +28,7 @@
 - Measure tool to check distance between any two points
 - ability to asign shapes to ships or points (ie 30km shpear around ashimu) that can be color coded
 - anonomyzed example match I can publish and use for testing
+- right side menu should display speed and distance from center
+- right click to drag camera around
+- ability to center on beacons
+- button to re-center on center
