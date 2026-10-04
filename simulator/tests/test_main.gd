@@ -20,6 +20,7 @@ func before_each() -> void:
 
 
 func after_each() -> void:
+	tree.root.content_scale_factor = 1.0
 	Settings.path = _saved_path
 	Settings._cfg = null
 
@@ -96,8 +97,62 @@ func test_load_match() -> void:
 	assert_eq(m.timeline.max_value, 20.0)
 	assert_eq(m.file_label.text,
 		"match.positions.csv — 4 pilots (blue 1 / red 1 / unknown 2), 1 out of bounds")
-	assert_true(m.playing)
+	assert_false(m.playing, "starts paused")
+	assert_true(m.start_button.visible)
 	assert_eq(m.time, 0.0)
+
+
+func test_start_button_starts_once() -> void:
+	var m := _main()
+	assert_false(m.start_button.visible, "hidden with no match")
+	m.load_match(_match_csv())
+	m.start_button.pressed.emit()
+	assert_true(m.playing)
+	assert_false(m.start_button.visible)
+	m._toggle_play()
+	assert_false(m.playing)
+	assert_false(m.start_button.visible, "stays gone once started")
+	m.load_match(m.match_path)
+	assert_false(m.start_button.visible, "reloading the same match keeps it gone")
+	assert_true(m.playing)
+	m.load_match(write_csv([row(0, "solo", "Test Hull", C), row(1, "solo", "Test Hull", C)]))
+	assert_true(m.start_button.visible, "a new match shows it again")
+	assert_false(m.playing)
+
+
+func test_play_hides_start_button() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._toggle_play()
+	assert_true(m.playing)
+	assert_false(m.start_button.visible)
+
+
+func test_ui_scale_setting() -> void:
+	var m := _main()
+	assert_eq(m.ui_scale_option.selected, Main.UI_SCALES.find(1.0))
+	m.ui_scale_option.item_selected.emit(Main.UI_SCALES.find(1.5))
+	assert_eq(m.get_window().content_scale_factor, 1.5)
+	Settings._cfg = null  # Force a reload from disk.
+	assert_eq(Settings.get_value("display/ui_scale"), 1.5)
+	assert_almost(m.camera.fov,
+		m.camera.fov_for_height(m.get_viewport().get_visible_rect().size.y), 1e-3, "camera refits")
+
+
+func test_overlays_rescale_with_units_per_px() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._select("blue")
+	var ship: Dictionary = m.ships["blue"]
+	var label: float = ship.label.pixel_size
+	var select: float = ship.select_icon.pixel_size
+	assert_almost(label, m._units_per_px(1.0) * Main.LABEL_PX, 1e-7)
+	m._overlay_unit *= 2.0  # As if the FOV had stopped growing while the viewport did.
+	m._rescale_overlays()
+	assert_almost(ship.label.pixel_size, label / 2.0, 1e-7)
+	assert_almost(ship.select_icon.pixel_size, select / 2.0, 1e-7, "keeps the selection boost")
+	m._rescale_overlays()
+	assert_almost(ship.label.pixel_size, label / 2.0, 1e-7, "no change without a new ratio")
 
 
 func test_reload_replaces_ships() -> void:
@@ -119,9 +174,30 @@ func test_seek_clamps() -> void:
 	assert_eq(m.timeline.value, 7.5)
 
 
+func test_step_tick_pauses_and_snaps_to_whole_ticks() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._seek(7.5)
+	m._set_playing(true)
+	m._step_tick(1)
+	assert_eq(m.time, 8.0)
+	assert_false(m.playing)
+	m._step_tick(1)
+	assert_eq(m.time, 9.0)
+	m._seek(7.5)
+	m._step_tick(-1)
+	assert_eq(m.time, 7.0)
+	m._step_tick(-1)
+	assert_eq(m.time, 6.0)
+	m._seek(0.0)
+	m._step_tick(-1)
+	assert_eq(m.time, 0.0, "clamped at the start")
+
+
 func test_playback_stops_at_end_and_restarts() -> void:
 	var m := _main()
 	m.load_match(_match_csv())
+	m._set_playing(true)
 	m._seek(18.0)
 	m._process(1.0)
 	assert_almost(m.time, 19.0)
@@ -233,14 +309,14 @@ func test_click_event_mark_seeks_before_it() -> void:
 	assert_eq(m.event_strip.mark_at(m.event_strip.x_of(4.5)), -1, "nothing between ticks")
 
 
-func test_bracket_keys_jump_between_events() -> void:
+func test_playback_keys() -> void:
 	var m := _main()
 	m.load_match(_events_csv())
 	var key := func(code):
 		var ev := InputEventKey.new()
 		ev.keycode = code
 		ev.pressed = true
-		m._unhandled_input(ev)
+		m._input(ev)
 	key.call(KEY_BRACKETRIGHT)
 	assert_almost(m.time, 1.0)
 	key.call(KEY_BRACKETRIGHT)
@@ -249,6 +325,16 @@ func test_bracket_keys_jump_between_events() -> void:
 	assert_almost(m.time, 4.0, 1e-3, "no event after the last")
 	key.call(KEY_BRACKETLEFT)
 	assert_almost(m.time, 1.0)
+	var was_playing: bool = m.playing
+	key.call(KEY_SPACE)
+	assert_eq(m.playing, not was_playing)
+	key.call(KEY_SPACE)
+	assert_eq(m.playing, was_playing)
+	key.call(KEY_RIGHT)
+	assert_almost(m.time, 2.0)
+	key.call(KEY_LEFT)
+	key.call(KEY_LEFT)
+	assert_almost(m.time, 0.0)
 
 
 func test_mjd_trail_shows_briefly_after_jump() -> void:
@@ -567,8 +653,14 @@ func test_reload_drops_missing_selection() -> void:
 func test_boundary_toggle() -> void:
 	var m := _main()
 	assert_true(m.boundary.visible)
-	m.boundary_toggle.button_pressed = false
+	m.boundary_setting.button_pressed = false
 	assert_false(m.boundary.visible)
+
+
+func test_popups_opaque() -> void:
+	var m := _main()
+	for popup in [m.settings_popup, m.all_debug_menu, m.ship_debug_menu]:
+		assert_eq(popup.get_theme_stylebox("panel").bg_color.a, 1.0)
 
 
 # --- ship models -----------------------------------------------------------------
@@ -615,7 +707,6 @@ func test_models_on_draws_model_and_icon() -> void:
 	var m := _model_main()
 	m._set_models_on(true)
 	assert_true(Settings.get_value("display/ship_models"))
-	assert_true(m.models_toggle.button_pressed)
 	assert_true(m.models_setting.button_pressed)
 	m._seek(0.0)
 	m._update_ships()
@@ -747,3 +838,135 @@ func test_heading_without_smoothing_snaps() -> void:
 	m.time = 10.6
 	m._face_heading(ship, "p")
 	assert_almost(_nose(ship), Vector3.UP, 1e-3, "faces the new course right away")
+
+
+# --- debug overlays --------------------------------------------------------------
+
+func _right(m: Main, pos: Vector2, pressed: bool) -> void:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_RIGHT
+	ev.position = pos
+	ev.pressed = pressed
+	m._unhandled_input(ev)
+
+
+func test_right_click_ship_opens_its_debug_menu() -> void:
+	var m := _select_main()
+	_right(m, _screen(m, "blue"), true)
+	_right(m, _screen(m, "blue"), false)
+	assert_eq(m.debug_pilot, "blue")
+	assert_true(m.ship_debug_menu.visible)
+	assert_eq(m.ship_debug_menu.title_label.text, "blue")
+
+
+func test_right_drag_or_empty_space_opens_nothing() -> void:
+	var m := _select_main()
+	var pos := _screen(m, "blue")
+	_right(m, pos + Vector2(80, 0), true)
+	_right(m, pos, false)
+	assert_false(m.ship_debug_menu.visible, "pan ending on a ship")
+	_right(m, _empty_spot(m), true)
+	_right(m, _empty_spot(m), false)
+	assert_false(m.ship_debug_menu.visible, "empty space")
+
+
+func test_roster_right_click_opens_debug_menu() -> void:
+	var m := _select_main()
+	m.roster_table.row_context_pressed.emit("red")
+	assert_eq(m.debug_pilot, "red")
+	assert_true(m.ship_debug_menu.visible)
+
+
+func test_movement_vector_projects_velocity() -> void:
+	var m := _select_main()
+	var ship: Dictionary = m.ships["blue"]
+	assert_false(ship.vector.visible)
+	m._open_ship_debug_menu("blue", Vector2.ZERO)
+	m.ship_debug_menu.vector_check.button_pressed = true
+	assert_true(ship.vector.visible)
+	m._process(0.0)
+	# Smooth motion: blue's 0 s -> 4 s samples either side of 2 s.
+	var v := (on_line(0, 0.4) - on_line(0, 0.5)) / 4.0
+	assert_almost(ship.vector_tip, v * Main.VECTOR_SECONDS * Main.M_TO_UNITS)
+	m.all_debug_menu.seconds_spin.value = 10.0
+	m._process(0.0)
+	assert_almost(ship.vector_tip, v * 10.0 * Main.M_TO_UNITS)
+	m.ship_debug_menu.vector_check.button_pressed = false
+	assert_false(ship.vector.visible)
+
+
+func test_all_ships_vectors() -> void:
+	var m := _select_main()
+	m._open_all_debug_menu()
+	m.all_debug_menu.vector_check.button_pressed = true
+	for pilot in m.ships:
+		assert_true(m.ships[pilot].vector.visible, pilot)
+	m._open_all_debug_menu()
+	assert_true(m.all_debug_menu.vector_check.button_pressed, "shown as all on")
+	m.all_debug_menu.vector_check.button_pressed = false
+	for pilot in m.ships:
+		assert_false(m.ships[pilot].vector.visible, pilot)
+
+
+## Radii (km) of `pilot`'s range spheres.
+func _sphere_radii(m: Main, pilot: String) -> Array:
+	return m.ships[pilot].spheres.get_children().filter(func(c): return not c.is_queued_for_deletion()) \
+		.map(func(c): return c.get_child(1).mesh.radius)
+
+
+func test_ship_spheres_add_and_remove() -> void:
+	var m := _select_main()
+	m._open_ship_debug_menu("blue", Vector2.ZERO)
+	var menu: DebugMenu = m.ship_debug_menu
+	menu.radius_spin.value = 5.0
+	menu.add_button.pressed.emit()
+	menu.radius_spin.value = 20.0
+	menu.color_button.color = Color.RED
+	menu.add_button.pressed.emit()
+	assert_eq(_sphere_radii(m, "blue"), [5.0, 20.0])
+	assert_eq(_sphere_radii(m, "red"), [])
+	assert_eq(menu.sphere_list.get_child_count(), 2, "listed in the menu")
+	menu.sphere_removed.emit(0)
+	assert_eq(_sphere_radii(m, "blue"), [20.0])
+	assert_eq(m.debug["blue"].spheres[0].color, Color.RED)
+
+
+func test_all_ships_spheres_add_and_clear() -> void:
+	var m := _select_main()
+	m._add_sphere("blue", 3.0, Color.WHITE)
+	m.all_debug_menu.radius_spin.value = 8.0
+	m.all_debug_menu.add_button.pressed.emit()
+	for pilot in m.ships:
+		assert_true(_sphere_radii(m, pilot).has(8.0), pilot)
+	assert_eq(_sphere_radii(m, "blue"), [3.0, 8.0])
+	m.all_debug_menu.clear_button.pressed.emit()
+	for pilot in m.ships:
+		assert_eq(_sphere_radii(m, pilot), [], pilot)
+
+
+func test_debug_state_survives_same_match_reload_only() -> void:
+	var m := _select_main()
+	m._add_sphere("blue", 3.0, Color.WHITE)
+	m._set_vector("blue", true)
+	m.load_match(m.match_path)
+	assert_eq(_sphere_radii(m, "blue"), [3.0])
+	assert_true(m.ships["blue"].vector.visible)
+	m.load_match(_match_csv())
+	assert_eq(_sphere_radii(m, "blue"), [], "different match")
+	assert_false(m.ships["blue"].vector.visible)
+
+
+func test_beacon_jump_ranges() -> void:
+	var m := _main()
+	assert_false(m.beacon_ranges_corner.visible)
+	assert_false(m.beacon_ranges_centre.visible)
+	m.all_debug_menu.corner_check.button_pressed = true
+	assert_true(m.beacon_ranges_corner.visible)
+	assert_false(m.beacon_ranges_centre.visible)
+	m.all_debug_menu.centre_check.button_pressed = true
+	assert_true(m.beacon_ranges_centre.visible)
+	assert_eq(m.beacon_ranges_corner.get_child_count(), 8)
+	assert_eq(m.beacon_ranges_centre.get_child_count(), 1)
+	var centre: Node3D = m.beacon_ranges_centre.get_child(0)
+	assert_almost(centre.position, Vector3.ONE * Main.CUBE / 2.0)
+	assert_almost(centre.get_child(1).mesh.radius, Main.BEACON_JUMP_KM)

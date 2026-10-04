@@ -40,6 +40,9 @@ func _initialize() -> void:
 func _run() -> void:
 	# Let the root window settle so tests can add nodes and await frames.
 	await process_frame
+	# Headless windows report no real size; give the root viewport the default window size so
+	# viewport-relative layout (stretch is disabled) behaves as in the app.
+	root.size = Vector2i(1152, 648)
 	OS.add_logger(_catcher)
 	var filters := OS.get_cmdline_user_args()
 	var files := []

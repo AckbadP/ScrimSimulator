@@ -38,5 +38,9 @@ func test_smooth_motion_default_on() -> void:
 	assert_eq(Settings.get_value("display/smooth_motion"), true)
 
 
+func test_ui_scale_default_one() -> void:
+	assert_eq(Settings.get_value("display/ui_scale"), 1.0)
+
+
 func test_roster_columns_default_empty() -> void:
 	assert_eq(Settings.get_value("roster/columns"), [])

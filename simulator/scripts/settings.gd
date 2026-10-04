@@ -8,6 +8,8 @@ const DEFAULTS := {
 	"sde/auto_update": true,
 	"display/ship_models": true,
 	"display/smooth_motion": true,
+	# Interface scale (window content scale factor); resizing the window never scales the UI.
+	"display/ui_scale": 1.0,
 	# Match start detection: ignore position changes up to this many metres (overview jitter).
 	"match/ignore_jitter": false,
 	"match/jitter_threshold_m": 500.0,

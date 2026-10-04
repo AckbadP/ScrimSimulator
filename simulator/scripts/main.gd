@@ -7,7 +7,8 @@ extends Node3D
 const M_TO_UNITS := 0.001
 const CUBE := 100.0
 const SPEEDS := [0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
-const SEEK_STEP_S := 10.0
+## The server tick: samples are 1 s apart, so ←/→ step one sample.
+const TICK_S := 1.0
 ## Ships are drawn at their real hull radius, but never smaller than this angle (radians) as
 ## seen from the camera, so frigates stay visible from across the arena.
 const MIN_VISIBLE_ANGLE := 0.005
@@ -46,6 +47,11 @@ const CLICK_SLOP_PX := 4.0
 ## The selection bracket is this many times the size of the overview icon.
 const SELECT_SCALE := 1.8
 const SELECT_COLOR := Color(1, 1, 1, 0.9)
+## Ship/death label `pixel_size` per screen pixel spanned at 1 unit from the camera (0.0008 at the
+## default 75° FOV and 648 px viewport), so labels keep their on-screen size.
+const LABEL_PX := 0.338
+## Interface scale presets offered in Settings.
+const UI_SCALES := [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 const MJD_COLOR := Color(0.3, 0.9, 0.9)
 ## Timeline tick colour and legend name per `MatchData.Event`.
 const EVENT_COLORS := {
@@ -62,6 +68,11 @@ const EVENT_NAMES := {
 const EVENT_LEAD_S := 2.0
 ## A micro jump's take-off -> landing line stays up this long (match s) after the jump.
 const MJD_TRAIL_S := 5.0
+## Jump range drawn around the corner and centre beacons (debug menu).
+const BEACON_JUMP_KM := 5.0
+const VECTOR_SECONDS := 3.0
+## A movement vector's arrowhead is this fraction of its length.
+const ARROW_FRACTION := 0.08
 
 var data: MatchData
 var match_path := ""
@@ -74,12 +85,19 @@ var tracked := ""
 var selected := ""
 ## pilot -> Team picked with the roster's swap button; kept when the same match reloads.
 var team_overrides := {}
+## pilot -> { vector: bool, spheres: [{ radius_km, color }] } from the debug menus; kept when the
+## same match reloads.
+var debug := {}
+## Movement vectors end where the ship will be this many seconds from now.
+var vector_seconds := VECTOR_SECONDS
 
 ## pilot -> { node, visual, model_id, icon, select_icon, label, ship_type, radius, dead, color, tint, death_t,
-## death_marker, heading, heading_t }; `heading` is the model's rotation as of match time
-## `heading_t`; `radius` is the true hull radius in scene units (0 if unknown), `visual` the
-## sphere or model under `node`, `model_id` the type ID it shows (0 = sphere), `tint` the colour
-## the ship is currently drawn in.
+## death_marker, heading, heading_t, vector, vector_tip, spheres }; `heading` is the model's
+## rotation as of match time `heading_t`; `radius` is the true hull radius in scene units (0 if
+## unknown), `visual` the sphere or model under `node`, `model_id` the type ID it shows
+## (0 = sphere), `tint` the colour the ship is currently drawn in; `vector` the debug movement
+## line (ending at `vector_tip`, relative to the ship) and `spheres` the node holding its debug
+## range spheres.
 var ships := {}
 var ships_root: Node3D
 var boundary: Node3D
@@ -94,23 +112,29 @@ var smooth_on := true
 ## Corner/centre markers: plain boxes, or MJU models + icons.
 var markers_box: Node3D
 var markers_model: Node3D
+## 5 km jump range spheres around the corner beacons and the centre one (debug menu).
+var beacon_ranges_corner: Node3D
+var beacon_ranges_centre: Node3D
+var vector_material: StandardMaterial3D
 
 var open_dialog: FileDialog
 var play_button: Button
+## Big centred button shown over a freshly opened (paused) match; gone once playback first starts.
+var start_button: Button
 var timeline: HSlider
 var event_strip: EventStrip
 ## { t: float, node: Node3D } per micro jump: a line from take-off to landing.
 var mjd_trails: Array = []
 var time_label: Label
-var boundary_toggle: CheckButton
-var models_toggle: CheckButton
+var boundary_setting: CheckBox
 var models_setting: CheckBox
 ## Match-start jitter settings: on/off and threshold (metres).
 var jitter_setting: CheckBox
 var jitter_spin: SpinBox
+var ui_scale_option: OptionButton
 var file_label: Label
 var sde_label: Label
-var settings_popup: PopupPanel
+var settings_popup: OpaquePopup
 var download_dialog: ConfirmationDialog
 var assets_dialog: ConfirmationDialog
 var bottom_panel: PanelContainer
@@ -119,22 +143,35 @@ var roster_table: RosterTable
 var info_panel: PanelContainer
 var info_label: Label
 var select_texture: Texture2D
+## Debug menus: one ship's (for `debug_pilot`) and every ship's.
+var ship_debug_menu: DebugMenu
+var all_debug_menu: DebugMenu
+var debug_pilot := ""
 ## pilot -> its toggle Button in the roster.
 var roster_buttons := {}
 var _scrubbing := false
 var _press_pos := Vector2.INF
+var _right_press_pos := Vector2.INF
+## `_units_per_px(1.0)` that the fixed-size icons and labels are currently sized for.
+var _overlay_unit := 0.0
 
 
 func _ready() -> void:
 	sphere_mesh.radius = 1.0
 	sphere_mesh.height = 2.0
+	vector_material = _material(Color.WHITE, false)
+	vector_material.vertex_color_use_as_albedo = true
+	vector_material.no_depth_test = true
 	sizes = ShipSizes.new()
 	add_child(sizes)
 	assets = ShipAssets.new()
 	add_child(assets)
 	models_on = Settings.get_value("display/ship_models")
 	smooth_on = Settings.get_value("display/smooth_motion")
+	get_window().content_scale_factor = Settings.get_value("display/ui_scale")
 	_build_environment()
+	_overlay_unit = _units_per_px(1.0)
+	get_viewport().size_changed.connect(_on_viewport_resized)
 	_build_markers()
 	_build_boundary()
 	ships_root = Node3D.new()
@@ -156,7 +193,18 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	var i := args.find("--csv")
 	if i >= 0 and i + 1 < args.size():
-		load_match(args[i + 1])
+		load_match(_resolve_cli_path(args[i + 1]))
+
+
+## `--path` makes Godot chdir into the project, so a relative CLI path is resolved against the
+## launching shell's directory (PWD is left untouched by that chdir).
+static func _resolve_cli_path(path: String) -> String:
+	if path.is_absolute_path():
+		return path
+	var pwd := OS.get_environment("PWD")
+	if pwd.is_empty():
+		return path
+	return pwd.path_join(path).simplify_path()
 
 
 func load_match(path: String) -> void:
@@ -168,6 +216,8 @@ func load_match(path: String) -> void:
 	data.smooth = smooth_on
 	if path != match_path:
 		team_overrides.clear()
+		debug.clear()
+		start_button.visible = true
 	for pilot in team_overrides:
 		if data.teams.has(pilot):
 			data.teams[pilot] = team_overrides[pilot]
@@ -193,7 +243,7 @@ func load_match(path: String) -> void:
 	for pilot in data.deaths:
 		print("  %s: out of bounds at %s" % [pilot, _fmt_time(data.deaths[pilot].t)])
 	_seek(0.0)
-	_set_playing(true)
+	_set_playing(not start_button.visible)
 
 
 func _update_file_label() -> void:
@@ -259,7 +309,6 @@ func _set_models_on(on: bool) -> void:
 		return
 	models_on = on
 	Settings.set_value("display/ship_models", on)
-	models_toggle.set_pressed_no_signal(on)
 	models_setting.set_pressed_no_signal(on)
 	if on:
 		assets.start(true, false)
@@ -308,6 +357,7 @@ func _process(delta: float) -> void:
 			time = data.duration
 			_set_playing(false)
 	_update_ships()
+	_update_vectors()
 	_update_mjd_trails()
 	if tracked != "" and ships[tracked].node.visible:
 		camera.set_target(ships[tracked].node.position)
@@ -322,30 +372,47 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_on_left_click(event)
 		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		_on_right_click(event)
+		return
 	if not (event is InputEventKey and event.pressed):
 		return
 	if event.keycode == KEY_ESCAPE:
 		_select("")
 		return
 	if event.keycode == KEY_B:
-		boundary_toggle.button_pressed = not boundary_toggle.button_pressed
+		boundary_setting.button_pressed = not boundary_setting.button_pressed
 		return
 	if event.keycode == KEY_M:
 		_set_models_on(not models_on)
 		return
-	if data == null:
+	if event.keycode == KEY_D:
+		_open_all_debug_menu()
+		return
+
+
+## Playback keys are taken here, before the GUI, so a focused button or slider can't swallow
+## Space or the arrows; only a focused text field keeps them.
+func _input(event: InputEvent) -> void:
+	if data == null or not (event is InputEventKey and event.pressed):
+		return
+	if get_viewport().gui_get_focus_owner() is LineEdit:
 		return
 	match event.keycode:
 		KEY_SPACE:
-			_toggle_play()
+			if not event.echo:
+				_toggle_play()
 		KEY_LEFT:
-			_seek(time - SEEK_STEP_S)
+			_step_tick(-1)
 		KEY_RIGHT:
-			_seek(time + SEEK_STEP_S)
+			_step_tick(1)
 		KEY_BRACKETLEFT:
 			_jump_event(-1)
 		KEY_BRACKETRIGHT:
 			_jump_event(1)
+		_:
+			return
+	get_viewport().set_input_as_handled()
 
 
 # --- ships -------------------------------------------------------------------
@@ -367,13 +434,24 @@ func _add_ship(pilot: String) -> void:
 	var label := _label(color)
 	node.add_child(label)
 
+	var vector := MeshInstance3D.new()
+	vector.mesh = ImmediateMesh.new()
+	vector.material_override = vector_material
+	vector.visible = false
+	node.add_child(vector)
+
+	var spheres := Node3D.new()
+	node.add_child(spheres)
+
 	node.visible = false
 	ships_root.add_child(node)
 	ships[pilot] = {
 		"node": node, "visual": visual, "model_id": 0, "icon": icon, "select_icon": select_icon, "label": label,
 		"ship_type": "", "radius": 0.0, "dead": false, "color": color, "tint": color,
 		"death_t": INF, "death_marker": null, "heading": Quaternion.IDENTITY, "heading_t": -INF,
+		"vector": vector, "vector_tip": Vector3.ZERO, "spheres": spheres,
 	}
+	_apply_debug(pilot)
 	if data.deaths.has(pilot):
 		var death: Dictionary = data.deaths[pilot]
 		ships[pilot].death_t = death.t
@@ -412,6 +490,33 @@ func _set_icon(icon: Sprite3D, tex: Texture2D, color: Color) -> void:
 ## Scene units spanned by one screen pixel at distance `d` from the camera.
 func _units_per_px(d: float) -> float:
 	return d * 2.0 * tan(deg_to_rad(camera.fov) / 2.0) / get_viewport().get_visible_rect().size.y
+
+
+func _on_viewport_resized() -> void:
+	camera.fit_viewport()
+	_rescale_overlays()
+
+
+## Keeps fixed-size icons and labels at the same UI-pixel size after the FOV or viewport changes
+## (the camera's FOV stops growing at `MAX_FOV`, so their units per pixel drift).
+func _rescale_overlays() -> void:
+	var unit := _units_per_px(1.0)
+	if is_equal_approx(unit, _overlay_unit) or _overlay_unit <= 0.0:
+		_overlay_unit = unit
+		return
+	var ratio := unit / _overlay_unit
+	_overlay_unit = unit
+	for node in find_children("*", "Sprite3D", true, false) + find_children("*", "Label3D", true, false):
+		if node.fixed_size:
+			node.pixel_size *= ratio
+
+
+## Sets the interface scale (window content scale), remembering it for next time.
+func _set_ui_scale(factor: float) -> void:
+	Settings.set_value("display/ui_scale", factor)
+	get_window().content_scale_factor = factor
+	_on_viewport_resized()
+	_fit_roster()
 
 
 ## An X where `pilot` crossed the boundary, labelled with the time.
@@ -488,11 +593,11 @@ func _jump_event(dir: int) -> void:
 			return
 
 
-static func _label(color: Color) -> Label3D:
+func _label(color: Color) -> Label3D:
 	var label := Label3D.new()
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.fixed_size = true
-	label.pixel_size = 0.0008
+	label.pixel_size = _units_per_px(1.0) * LABEL_PX
 	label.font_size = 24
 	label.outline_size = 6
 	label.no_depth_test = true
@@ -568,18 +673,11 @@ func _refresh_visual(ship: Dictionary) -> void:
 func _face_heading(ship: Dictionary, pilot: String) -> void:
 	if ship.model_id == 0:
 		return
-	var window := HEADING_WINDOW_S if smooth_on else 0.5
-	var prev := data.sample(pilot, time - window)
-	var next := data.sample(pilot, time + window) if smooth_on else {}
-	var now := data.sample(pilot, time)
-	var a: Dictionary = prev if not prev.is_empty() else now
-	var b: Dictionary = next if not next.is_empty() else now
 	var target: Quaternion = ship.heading
-	if b.t > a.t:
-		var v: Vector3 = (b.pos - a.pos) / (b.t - a.t)
-		if v.length() >= MIN_HEADING_SPEED:
-			var up := Vector3.UP if absf(v.normalized().y) < 0.99 else Vector3.RIGHT
-			target = (Basis.looking_at(v, up) * MODEL_FORWARD).get_rotation_quaternion()
+	var v := _velocity(pilot)
+	if v.length() >= MIN_HEADING_SPEED:
+		var up := Vector3.UP if absf(v.normalized().y) < 0.99 else Vector3.RIGHT
+		target = (Basis.looking_at(v, up) * MODEL_FORWARD).get_rotation_quaternion()
 	var dt: float = time - ship.heading_t
 	ship.heading_t = time
 	if smooth_on and dt > 0.0 and dt <= MAX_TURN_STEP_S:
@@ -589,6 +687,20 @@ func _face_heading(ship: Dictionary, pilot: String) -> void:
 	else:
 		ship.heading = target
 	ship.visual.basis = Basis(ship.heading)
+
+
+## `pilot`'s velocity (m/s) now, from its track: averaged over `HEADING_WINDOW_S` either side with
+## smooth motion, else over the last half second. ZERO when it can't be told.
+func _velocity(pilot: String) -> Vector3:
+	var window := HEADING_WINDOW_S if smooth_on else 0.5
+	var prev := data.sample(pilot, time - window)
+	var next := data.sample(pilot, time + window) if smooth_on else {}
+	var now := data.sample(pilot, time)
+	var a: Dictionary = prev if not prev.is_empty() else now
+	var b: Dictionary = next if not next.is_empty() else now
+	if a.is_empty() or b.is_empty() or b.t <= a.t:
+		return Vector3.ZERO
+	return (b.pos - a.pos) / (b.t - a.t)
 
 
 ## Scene units from the node's centre to just above an `ICON_PX` icon at the camera's distance.
@@ -631,6 +743,18 @@ func _pick_ship(screen_pos: Vector2) -> String:
 			best = pilot
 			best_d = d
 	return best
+
+
+## Right click (not drag: that pans) on a ship opens its debug menu.
+func _on_right_click(event: InputEventMouseButton) -> void:
+	if event.pressed:
+		_right_press_pos = event.position
+		return
+	if event.position.distance_to(_right_press_pos) <= CLICK_SLOP_PX:
+		var pilot := _pick_ship(event.position)
+		if pilot != "":
+			_open_ship_debug_menu(pilot, event.position)
+	_right_press_pos = Vector2.INF
 
 
 ## Selects `pilot` ("" clears): brackets it in space, highlights its roster row and fills the
@@ -725,6 +849,124 @@ func _motion(pilot: String) -> Dictionary:
 	}
 
 
+# --- debug overlays ----------------------------------------------------------
+
+## `pilot`'s debug state, created empty on first use.
+func _debug(pilot: String) -> Dictionary:
+	if not debug.has(pilot):
+		debug[pilot] = {"vector": false, "spheres": []}
+	return debug[pilot]
+
+
+## Rebuilds `pilot`'s range spheres and shows or hides its movement vector from `debug`.
+func _apply_debug(pilot: String) -> void:
+	var ship: Dictionary = ships[pilot]
+	var state: Dictionary = debug.get(pilot, {"vector": false, "spheres": []})
+	for c in ship.spheres.get_children():
+		ship.spheres.remove_child(c)
+		c.queue_free()
+	for sphere in state.spheres:
+		ship.spheres.add_child(_range_sphere(sphere.radius_km, sphere.color, 0.35, 48, 6, 3))
+	ship.vector.visible = state.vector
+
+
+## Redraws each shown movement vector: a line from the ship to where it will be in
+## `vector_seconds` at its current velocity, with an arrowhead; nothing when (nearly) stopped.
+func _update_vectors() -> void:
+	for pilot in ships:
+		var ship: Dictionary = ships[pilot]
+		if not ship.vector.visible or not ship.node.visible:
+			continue
+		var lines: ImmediateMesh = ship.vector.mesh
+		lines.clear_surfaces()
+		var v := _velocity(pilot)
+		if v.length() < MIN_HEADING_SPEED:
+			ship.vector_tip = Vector3.ZERO
+			continue
+		var tip := v * vector_seconds * M_TO_UNITS
+		ship.vector_tip = tip
+		var dir := tip.normalized()
+		var side := dir.cross(Vector3.UP if absf(dir.y) < 0.99 else Vector3.RIGHT).normalized()
+		var head := tip.length() * ARROW_FRACTION
+		lines.surface_begin(Mesh.PRIMITIVE_LINES)
+		lines.surface_set_color(Color(ship.tint, 1.0))
+		for p in [Vector3.ZERO, tip, tip, tip - (dir - side * 0.5) * head, tip, tip - (dir + side * 0.5) * head]:
+			lines.surface_add_vertex(p)
+		lines.surface_end()
+
+
+func _set_vector(pilot: String, on: bool) -> void:
+	_debug(pilot).vector = on
+	_apply_debug(pilot)
+
+
+func _add_sphere(pilot: String, radius_km: float, color: Color) -> void:
+	_debug(pilot).spheres.append({"radius_km": radius_km, "color": color})
+	_apply_debug(pilot)
+
+
+func _remove_sphere(pilot: String, index: int) -> void:
+	_debug(pilot).spheres.remove_at(index)
+	_apply_debug(pilot)
+
+
+func _clear_spheres() -> void:
+	for pilot in ships:
+		_debug(pilot).spheres.clear()
+		_apply_debug(pilot)
+
+
+func _set_beacon_range(centre: bool, on: bool) -> void:
+	(beacon_ranges_centre if centre else beacon_ranges_corner).visible = on
+
+
+func _open_ship_debug_menu(pilot: String, at: Vector2) -> void:
+	debug_pilot = pilot
+	_refresh_ship_debug_menu()
+	ship_debug_menu.open_at(at)
+
+
+func _refresh_ship_debug_menu() -> void:
+	var state := _debug(debug_pilot)
+	ship_debug_menu.show_state(debug_pilot, state.vector, state.spheres)
+
+
+func _open_all_debug_menu() -> void:
+	_refresh_all_debug_menu()
+	all_debug_menu.open_at(get_viewport().get_visible_rect().size / 2.0 - Vector2(150, 150))
+
+
+func _refresh_all_debug_menu() -> void:
+	var all_on := not ships.is_empty() and ships.keys().all(func(p): return _debug(p).vector)
+	all_debug_menu.show_state("Debug — all ships", all_on, [])
+
+
+## The two debug menus; their signals change `debug` and redraw the overlays.
+func _build_debug_menus(layer: CanvasLayer) -> void:
+	ship_debug_menu = DebugMenu.new()
+	layer.add_child(ship_debug_menu)
+	var for_ship := func(f: Callable):
+		if ships.has(debug_pilot):
+			f.call()
+			_refresh_ship_debug_menu()
+	ship_debug_menu.vector_toggled.connect(func(on): for_ship.call(func(): _set_vector(debug_pilot, on)))
+	ship_debug_menu.sphere_added.connect(func(r, c): for_ship.call(func(): _add_sphere(debug_pilot, r, c)))
+	ship_debug_menu.sphere_removed.connect(func(i): for_ship.call(func(): _remove_sphere(debug_pilot, i)))
+
+	all_debug_menu = DebugMenu.new(true)
+	all_debug_menu.seconds_spin.set_value_no_signal(vector_seconds)
+	layer.add_child(all_debug_menu)
+	all_debug_menu.vector_toggled.connect(func(on):
+		for pilot in ships:
+			_set_vector(pilot, on))
+	all_debug_menu.sphere_added.connect(func(r, c):
+		for pilot in ships:
+			_add_sphere(pilot, r, c))
+	all_debug_menu.spheres_cleared.connect(_clear_spheres)
+	all_debug_menu.vector_seconds_changed.connect(func(sec): vector_seconds = sec)
+	all_debug_menu.beacon_range_toggled.connect(_set_beacon_range)
+
+
 # --- playback ----------------------------------------------------------------
 
 func _seek(t: float) -> void:
@@ -732,6 +974,13 @@ func _seek(t: float) -> void:
 		return
 	time = clampf(t, 0.0, data.duration)
 	timeline.set_value_no_signal(time)
+
+
+## Pauses and moves to the next (`dir` 1) or previous (-1) whole tick.
+func _step_tick(dir: int) -> void:
+	_set_playing(false)
+	var tick := floorf(time / TICK_S + 0.001) + 1.0 if dir > 0 else ceilf(time / TICK_S - 0.001) - 1.0
+	_seek(tick * TICK_S)
 
 
 func _toggle_play() -> void:
@@ -744,6 +993,8 @@ func _toggle_play() -> void:
 
 func _set_playing(p: bool) -> void:
 	playing = p
+	if p:
+		start_button.visible = false
 	play_button.text = "Pause" if p else "Play"
 
 
@@ -810,6 +1061,18 @@ func _build_markers() -> void:
 		m.position = positions[i]
 		markers_box.add_child(m)
 
+	beacon_ranges_corner = Node3D.new()
+	beacon_ranges_corner.visible = false
+	add_child(beacon_ranges_corner)
+	beacon_ranges_centre = Node3D.new()
+	beacon_ranges_centre.visible = false
+	add_child(beacon_ranges_centre)
+	for i in positions.size():
+		var color := CORNER_COLOR if i < 8 else CENTRE_COLOR
+		var sphere := _range_sphere(BEACON_JUMP_KM, color, 0.35, 48, 6, 3)
+		sphere.position = positions[i]
+		(beacon_ranges_corner if i < 8 else beacon_ranges_centre).add_child(sphere)
+
 	# Cube edges, for orientation.
 	var lines := ImmediateMesh.new()
 	lines.surface_begin(Mesh.PRIMITIVE_LINES)
@@ -855,44 +1118,48 @@ func _build_mju_markers() -> void:
 		markers_model.add_child(marker)
 
 
-## Arena boundary: a wireframe sphere plus a faint shell, centred on the cube.
+## Arena boundary, centred on the cube.
 func _build_boundary() -> void:
-	boundary = Node3D.new()
+	boundary = _range_sphere(BOUNDARY_KM, BOUNDARY_COLOR, 0.25, 96, 8, 5)
 	boundary.position = Vector3.ONE * CUBE / 2.0
 	add_child(boundary)
 
-	const SEGMENTS := 96
-	const MERIDIANS := 8
-	const PARALLELS := 5
+
+## A sphere of `radius` (scene units) drawn as `meridians` + `parallels` wire circles of
+## `segments` lines each (at `wire_alpha`), plus a faint shell.
+static func _range_sphere(radius: float, color: Color, wire_alpha: float, segments: int,
+		meridians: int, parallels: int) -> Node3D:
+	var root := Node3D.new()
 	var lines := ImmediateMesh.new()
 	lines.surface_begin(Mesh.PRIMITIVE_LINES)
-	for k in MERIDIANS:
-		var lon := PI * k / MERIDIANS
-		for j in SEGMENTS:
-			for a in [TAU * j / SEGMENTS, TAU * (j + 1) / SEGMENTS]:
-				lines.surface_add_vertex(Vector3(cos(a) * cos(lon), sin(a), cos(a) * sin(lon)) * BOUNDARY_KM)
-	for k in PARALLELS:
-		var lat := PI * (k + 1) / (PARALLELS + 1) - PI / 2.0
-		for j in SEGMENTS:
-			for a in [TAU * j / SEGMENTS, TAU * (j + 1) / SEGMENTS]:
-				lines.surface_add_vertex(Vector3(cos(a) * cos(lat), sin(lat), sin(a) * cos(lat)) * BOUNDARY_KM)
+	for k in meridians:
+		var lon := PI * k / meridians
+		for j in segments:
+			for a in [TAU * j / segments, TAU * (j + 1) / segments]:
+				lines.surface_add_vertex(Vector3(cos(a) * cos(lon), sin(a), cos(a) * sin(lon)) * radius)
+	for k in parallels:
+		var lat := PI * (k + 1) / (parallels + 1) - PI / 2.0
+		for j in segments:
+			for a in [TAU * j / segments, TAU * (j + 1) / segments]:
+				lines.surface_add_vertex(Vector3(cos(a) * cos(lat), sin(lat), sin(a) * cos(lat)) * radius)
 	lines.surface_end()
 	var wire := MeshInstance3D.new()
 	wire.mesh = lines
-	wire.material_override = _material(Color(BOUNDARY_COLOR, 0.25), false)
-	boundary.add_child(wire)
+	wire.material_override = _material(Color(color, wire_alpha), false)
+	root.add_child(wire)
 
 	var sphere := SphereMesh.new()
-	sphere.radius = BOUNDARY_KM
-	sphere.height = BOUNDARY_KM * 2.0
-	sphere.radial_segments = 64
-	sphere.rings = 32
-	var shell_mat := _material(Color(BOUNDARY_COLOR, 0.04), false)
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = segments * 2 / 3
+	sphere.rings = segments / 3
+	var shell_mat := _material(Color(color, 0.04), false)
 	shell_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	var shell := MeshInstance3D.new()
 	shell.mesh = sphere
 	shell.material_override = shell_mat
-	boundary.add_child(shell)
+	root.add_child(shell)
+	return root
 
 
 static func _material(color: Color, shaded: bool) -> StandardMaterial3D:
@@ -940,20 +1207,6 @@ func _build_ui() -> void:
 	speed_option.item_selected.connect(func(idx): speed = SPEEDS[idx])
 	row.add_child(speed_option)
 
-	boundary_toggle = CheckButton.new()
-	boundary_toggle.text = "125 km boundary (B)"
-	boundary_toggle.button_pressed = true
-	boundary_toggle.focus_mode = Control.FOCUS_NONE
-	boundary_toggle.toggled.connect(func(on): boundary.visible = on)
-	row.add_child(boundary_toggle)
-
-	models_toggle = CheckButton.new()
-	models_toggle.text = "Ship models (M)"
-	models_toggle.button_pressed = models_on
-	models_toggle.focus_mode = Control.FOCUS_NONE
-	models_toggle.toggled.connect(_set_models_on)
-	row.add_child(models_toggle)
-
 	time_label = Label.new()
 	time_label.text = "--:-- / --:--"
 	row.add_child(time_label)
@@ -970,6 +1223,12 @@ func _build_ui() -> void:
 	settings_button.text = "Settings…"
 	settings_button.pressed.connect(func(): settings_popup.popup_centered())
 	row.add_child(settings_button)
+
+	var debug_button := Button.new()
+	debug_button.text = "Debug…"
+	debug_button.tooltip_text = "Movement vectors and range spheres for every ship, beacon jump range (D).\nRight-click a ship or roster row for its own."
+	debug_button.pressed.connect(_open_all_debug_menu)
+	row.add_child(debug_button)
 
 	sde_label = Label.new()
 	sde_label.modulate = Color(1, 1, 1, 0.6)
@@ -993,6 +1252,17 @@ func _build_ui() -> void:
 	timeline.drag_ended.connect(func(_changed): _scrubbing = false)
 	box.add_child(timeline)
 	event_strip.slider = timeline
+
+	start_button = Button.new()
+	start_button.text = "Start"
+	start_button.custom_minimum_size = Vector2(200, 70)
+	start_button.add_theme_font_size_override("font_size", 32)
+	start_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	start_button.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	start_button.grow_vertical = Control.GROW_DIRECTION_BOTH
+	start_button.visible = false
+	start_button.pressed.connect(_set_playing.bind(true))
+	layer.add_child(start_button)
 
 	open_dialog = FileDialog.new()
 	open_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
@@ -1026,10 +1296,11 @@ func _build_ui() -> void:
 
 	_build_settings(layer)
 	_build_roster(layer)
+	_build_debug_menus(layer)
 
 
 func _build_settings(layer: CanvasLayer) -> void:
-	settings_popup = PopupPanel.new()
+	settings_popup = OpaquePopup.new()
 	layer.add_child(settings_popup)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
@@ -1046,16 +1317,38 @@ func _build_settings(layer: CanvasLayer) -> void:
 	box.add_child(auto_update)
 
 	models_setting = CheckBox.new()
-	models_setting.text = "Draw ships as hull models with overview icons (instead of spheres)"
+	models_setting.text = "Draw ships as hull models with overview icons (instead of spheres) (M)"
 	models_setting.button_pressed = models_on
 	models_setting.toggled.connect(_set_models_on)
 	box.add_child(models_setting)
+
+	boundary_setting = CheckBox.new()
+	boundary_setting.text = "Show the 125 km arena boundary (B)"
+	boundary_setting.button_pressed = boundary.visible
+	boundary_setting.toggled.connect(func(on): boundary.visible = on)
+	box.add_child(boundary_setting)
 
 	var smooth_setting := CheckBox.new()
 	smooth_setting.text = "Smooth ship movement between position samples (instead of straight lines)"
 	smooth_setting.button_pressed = smooth_on
 	smooth_setting.toggled.connect(_set_smooth_on)
 	box.add_child(smooth_setting)
+
+	var ui_scale := HBoxContainer.new()
+	box.add_child(ui_scale)
+	var ui_scale_label := Label.new()
+	ui_scale_label.text = "Interface scale"
+	ui_scale.add_child(ui_scale_label)
+	ui_scale_option = OptionButton.new()
+	var saved: float = Settings.get_value("display/ui_scale")
+	var closest := 0
+	for i in UI_SCALES.size():
+		ui_scale_option.add_item("%d%%" % roundi(UI_SCALES[i] * 100.0))
+		if absf(UI_SCALES[i] - saved) < absf(UI_SCALES[closest] - saved):
+			closest = i
+	ui_scale_option.select(closest)
+	ui_scale_option.item_selected.connect(func(idx): _set_ui_scale(UI_SCALES[idx]))
+	ui_scale.add_child(ui_scale_option)
 
 	var jitter := HBoxContainer.new()
 	box.add_child(jitter)
@@ -1119,6 +1412,8 @@ func _build_roster(layer: CanvasLayer) -> void:
 	roster_table = RosterTable.new()
 	roster_table.row_pressed.connect(_set_tracked)
 	roster_table.swap_pressed.connect(_swap_team)
+	roster_table.row_context_pressed.connect(func(pilot):
+		_open_ship_debug_menu(pilot, get_viewport().get_mouse_position()))
 	roster_table.layout_changed.connect(_fit_roster)
 	roster_panel.add_child(roster_table)
 	_fit_roster()
