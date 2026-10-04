@@ -44,3 +44,11 @@ func test_ui_scale_default_one() -> void:
 
 func test_roster_columns_default_empty() -> void:
 	assert_eq(Settings.get_value("roster/columns"), [])
+
+
+func test_overlay_defaults() -> void:
+	assert_eq(Settings.get_value("overlay/name"), true)
+	assert_eq(Settings.get_value("overlay/type"), true)
+	assert_eq(Settings.get_value("overlay/distance"), false)
+	assert_eq(Settings.get_value("overlay/speed"), false)
+	assert_eq(Settings.get_value("overlay/icon"), true)

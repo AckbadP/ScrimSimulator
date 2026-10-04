@@ -701,6 +701,48 @@ func test_rename_team_shows_and_persists() -> void:
 	assert_true(m2.team_names.is_empty(), "another match has its own names")
 
 
+func test_ship_overlay_default_name_and_type() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._seek(1.0)
+	m._update_ships()
+	assert_eq(m.ships["runner"].label.text, "runner\nTest Hull")
+
+
+func test_ship_overlay_distance_and_speed() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._set_smooth_on(false)  # Straight-line motion, so the distances are exact.
+	m._set_overlay("name", false)
+	m._set_overlay("type", false)
+	m._set_overlay("distance", true)
+	m._set_overlay("speed", true)
+	m._seek(1.0)
+	m._update_ships()
+	var label: Label3D = m.ships["runner"].label
+	assert_eq(label.text, "112.5 km\n0 m/s")
+	m._seek(1.5)
+	m._update_ships()
+	assert_eq(label.text, "118.8 km\n0 m/s", "distance follows the ship every frame")
+	assert_true(Settings.get_value("overlay/speed"))
+	assert_false(Settings.get_value("overlay/name"))
+
+
+func test_ship_overlay_all_off_hides_label_but_not_death() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	for field in Main.OVERLAY_FIELDS:
+		m._set_overlay(field, false)
+	m._seek(1.0)
+	m._update_ships()
+	var runner: Dictionary = m.ships["runner"]
+	assert_false(runner.label.visible)
+	m._seek(3.0)
+	m._update_ships()
+	assert_true(runner.label.visible)
+	assert_eq(runner.label.text, "DEAD (out of bounds)")
+
+
 func test_double_click_team_asks_rename() -> void:
 	var m := _main()
 	m.load_match(_match_csv())
@@ -924,7 +966,7 @@ func test_boundary_toggle() -> void:
 
 func test_popups_opaque() -> void:
 	var m := _main()
-	for popup in [m.settings_popup, m.all_debug_menu, m.ship_debug_menu]:
+	for popup in [m.settings_popup, m.overlay_popup, m.all_debug_menu, m.ship_debug_menu]:
 		assert_eq(popup.get_theme_stylebox("panel").bg_color.a, 1.0)
 
 
@@ -992,6 +1034,22 @@ func test_models_on_draws_model_and_icon() -> void:
 	assert_eq(blue.visual.mesh, m.sphere_mesh)
 	assert_false(blue.icon.visible)
 	assert_false(Settings.get_value("display/ship_models"))
+
+
+func test_ship_overlay_icon_toggle() -> void:
+	var m := _model_main()
+	m._set_models_on(true)
+	m._seek(0.0)
+	m._update_ships()
+	var blue: Dictionary = m.ships["blue"]
+	assert_true(blue.icon.visible)
+	m._set_overlay("icon", false)
+	m._update_ships()
+	assert_false(blue.icon.visible)
+	assert_false(Settings.get_value("overlay/icon"))
+	m._set_overlay("icon", true)
+	m._update_ships()
+	assert_true(blue.icon.visible)
 
 
 func test_uncached_model_falls_back_to_sphere_with_icon() -> void:
