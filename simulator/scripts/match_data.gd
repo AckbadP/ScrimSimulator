@@ -43,7 +43,8 @@ var events: Array = []
 ## Lowercase ship type -> published hull radius in metres (from `ShipSizes`); unknown types
 ## count as points.
 var radii: Dictionary = {}
-## CSV time of match time 0: just before the first ship moves (or the first sample if none do).
+## CSV time of match time 0: just before the first ship moves (or the first sample if none do,
+## or if the lead-in is kept).
 var start_time := 0.0
 ## Match time of the last sample.
 var duration := 0.0
@@ -53,8 +54,9 @@ var smooth := false
 
 ## A ship further than `move_threshold_m` from its first sample has started moving; the match
 ## (time 0) begins at the sample before the earliest such move, skipping the pre-match countdown.
-## 0 counts any change of position.
-static func load_csv(path: String, ship_radii := {}, move_threshold_m := 0.0) -> MatchData:
+## 0 counts any change of position. `keep_lead_in` starts the match at the first sample instead
+## (a match with audio, which starts there too).
+static func load_csv(path: String, ship_radii := {}, move_threshold_m := 0.0, keep_lead_in := false) -> MatchData:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		push_error("Cannot open %s: %s" % [path, error_string(FileAccess.get_open_error())])
@@ -99,7 +101,7 @@ static func load_csv(path: String, ship_radii := {}, move_threshold_m := 0.0) ->
 		return null
 	for pilot in data.tracks:
 		data.tracks[pilot].sort_custom(func(a, b): return a.t < b.t)
-	var first_move := data._find_start(move_threshold_m)
+	var first_move := INF if keep_lead_in else data._find_start(move_threshold_m)
 	data.start_time = first_move if first_move < INF else t_min
 	data.duration = t_max - data.start_time
 	data._assign_teams()
