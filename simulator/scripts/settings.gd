@@ -17,6 +17,12 @@ const DEFAULTS := {
 	"roster/columns": [],
 	# CSV pilot name -> display name, applied in every match.
 	"names/pilots": {},
+	# What is drawn above each ship in space (Settings → Ship overlay).
+	"overlay/name": true,
+	"overlay/type": true,
+	"overlay/distance": false,
+	"overlay/speed": false,
+	"overlay/icon": true,
 }
 
 static var _cfg: ConfigFile
