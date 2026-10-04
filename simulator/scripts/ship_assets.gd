@@ -3,7 +3,7 @@ extends Node
 ## Hull models and overview bracket icons, for drawing ships instead of spheres.
 ##
 ## Brackets come from CCP's Image Export Collection icon zip (~18 MB, downloaded once with the
-## user's consent; only `Icons/items/Brackets/*` is kept). Models come from EVE_Model_Gallery
+## user's consent; only `Icons/items/Brackets/*` and the `EWAR_ICONS` module icons are kept). Models come from EVE_Model_Gallery
 ## (GLBs exported from the game client), indexed by type ID in its `resources_index_en.json`.
 ## The full set is several GB, so each hull is fetched the first time a match needs it. The
 ## GLBs are Draco-compressed, which Godot can't read, so every download is rewritten by the
@@ -53,6 +53,22 @@ const BRACKET_KEYWORDS := [
 	["blockade", "industrial"],
 ]
 const DEFAULT_BRACKET := "frigate"
+## Module icon in the icon zip per `CombatStats.EWAR_TYPES` key, found by matching the zip against
+## the icons of the T1 modules (type IDs in comments). The zip predates a Remote Sensor Booster
+## icon, so it gets the Sensor Booster's.
+const EWAR_ICONS := {
+	"scram": "Icons/items/76_64_1.png",  # Warp Scrambler I, 447
+	"disrupt": "Icons/items/4_64_9.png",  # Warp Disruptor I, 3242
+	"neut": "Icons/items/12_64_4.png",  # Small Energy Neutralizer I, 533
+	"nos": "Icons/items/1_64_3.png",  # Small Energy Nosferatu I, 530
+	"ecm": "Icons/items/4_64_12.png",  # Multispectral ECM I, 1957
+	"td": "Icons/items/5_64_7.png",  # Tracking Disruptor I, 2108
+	"gd": "Icons/items/5_64_17.png",  # Guidance Disruptor I, 37543
+	"damp": "Icons/items/4_64_11.png",  # Remote Sensor Dampener I, 1968
+	"tp": "Icons/items/56_64_1.png",  # Target Painter I, 12709
+	"rsb": "Icons/items/3_64_9.png",  # Sensor Booster I (no Remote Sensor Booster I icon)
+	"rtc": "Icons/items/74_64_8.png",  # Remote Tracking Computer I, 2103
+}
 
 ## Type ID -> model path relative to `GALLERY`.
 var index := {}
@@ -71,6 +87,7 @@ var _fetching := {}  # type id -> true while downloading or decoding
 var _failed := {}  # type id -> true; not retried until the next start
 var _scenes := {}  # type id -> PackedScene, or null if the model wouldn't load
 var _textures := {}  # bracket name -> Texture2D, or null
+var _ewar_textures := {}  # EWAR_ICONS key -> Texture2D, or null
 
 
 func _ready() -> void:
@@ -151,6 +168,18 @@ func bracket_texture(name: String) -> Texture2D:
 					_textures[name] = ImageTexture.create_from_image(img)
 				break
 	return _textures[name]
+
+
+## Module icon for electronic warfare `type` (an `EWAR_ICONS` key), or null if not downloaded.
+func ewar_texture(type: String) -> Texture2D:
+	if not _ewar_textures.has(type):
+		_ewar_textures[type] = null
+		var path := _dir.path_join("ewar").path_join("%s.png" % type)
+		if FileAccess.file_exists(path):
+			var img := Image.load_from_file(path)
+			if img:
+				_ewar_textures[type] = ImageTexture.create_from_image(img)
+	return _ewar_textures[type]
 
 
 static func bracket_name(group_id: int, group_name := "") -> String:
@@ -239,26 +268,35 @@ func full_download() -> void:
 		return
 	_set_status("Extracting overview icons…")
 	_thread = Thread.new()
-	_thread.start(func(): _finish_brackets.call_deferred(extract_brackets(zip, _dir.path_join("brackets"))))
+	_thread.start(func(): _finish_brackets.call_deferred(
+		extract_brackets(zip, _dir.path_join("brackets"), _dir.path_join("ewar"))))
 
 
-## Copies `Icons/items/Brackets/*` out of the IEC icon zip into `out_dir`, lowercasing names.
-## Returns an error message, or "" on success.
-static func extract_brackets(zip_path: String, out_dir: String) -> String:
+## Copies `Icons/items/Brackets/*` out of the IEC icon zip into `out_dir`, lowercasing names, and
+## (with an `ewar_dir`) the `EWAR_ICONS` into it as `<type>.png`. Returns an error message, or ""
+## on success; missing ewar icons aren't an error.
+static func extract_brackets(zip_path: String, out_dir: String, ewar_dir := "") -> String:
 	var zip := ZIPReader.new()
 	if zip.open(zip_path) != OK:
 		return "Cannot open %s" % zip_path
 	DirAccess.make_dir_recursive_absolute(out_dir)
+	if ewar_dir != "":
+		DirAccess.make_dir_recursive_absolute(ewar_dir)
 	var n := 0
 	for file in zip.get_files():
-		if not file.begins_with(BRACKETS_PREFIX) or file.get_extension().to_lower() != "png":
+		var dest := ""
+		if file.begins_with(BRACKETS_PREFIX) and file.get_extension().to_lower() == "png":
+			dest = out_dir.path_join(file.get_file().to_lower())
+			n += 1
+		elif ewar_dir != "" and EWAR_ICONS.values().has(file):
+			dest = ewar_dir.path_join("%s.png" % EWAR_ICONS.find_key(file))
+		else:
 			continue
-		var f := FileAccess.open(out_dir.path_join(file.get_file().to_lower()), FileAccess.WRITE)
+		var f := FileAccess.open(dest, FileAccess.WRITE)
 		if f == null:
 			zip.close()
-			return "Cannot write to %s" % out_dir
+			return "Cannot write to %s" % dest.get_base_dir()
 		f.store_buffer(zip.read_file(file))
-		n += 1
 	zip.close()
 	return "" if n > 0 else "Icon zip has no bracket icons"
 
@@ -272,6 +310,7 @@ func _finish_brackets(error: String) -> void:
 		return
 	has_brackets = true
 	_textures.clear()
+	_ewar_textures.clear()
 	_save_cache()
 	busy = false
 	await _refresh_index()
