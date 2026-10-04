@@ -46,6 +46,22 @@ const CLICK_SLOP_PX := 4.0
 ## The selection bracket is this many times the size of the overview icon.
 const SELECT_SCALE := 1.8
 const SELECT_COLOR := Color(1, 1, 1, 0.9)
+const MJD_COLOR := Color(0.3, 0.9, 0.9)
+## Timeline tick colour and legend name per `MatchData.Event`.
+const EVENT_COLORS := {
+	MatchData.Event.DEATH: Color(1.0, 0.3, 0.55),
+	MatchData.Event.BOUNDARY: BOUNDARY_COLOR,
+	MatchData.Event.MJD: MJD_COLOR,
+}
+const EVENT_NAMES := {
+	MatchData.Event.DEATH: "Podded",
+	MatchData.Event.BOUNDARY: "Out of bounds",
+	MatchData.Event.MJD: "MJD",
+}
+## Jumping to an event lands this many seconds before it, to see the lead-up.
+const EVENT_LEAD_S := 2.0
+## A micro jump's take-off -> landing line stays up this long (match s) after the jump.
+const MJD_TRAIL_S := 5.0
 
 var data: MatchData
 var match_path := ""
@@ -82,10 +98,16 @@ var markers_model: Node3D
 var open_dialog: FileDialog
 var play_button: Button
 var timeline: HSlider
+var event_strip: EventStrip
+## { t: float, node: Node3D } per micro jump: a line from take-off to landing.
+var mjd_trails: Array = []
 var time_label: Label
 var boundary_toggle: CheckButton
 var models_toggle: CheckButton
 var models_setting: CheckBox
+## Match-start jitter settings: on/off and threshold (metres).
+var jitter_setting: CheckBox
+var jitter_spin: SpinBox
 var file_label: Label
 var sde_label: Label
 var settings_popup: PopupPanel
@@ -138,7 +160,7 @@ func _ready() -> void:
 
 
 func load_match(path: String) -> void:
-	var d := MatchData.load_csv(path, sizes.radii())
+	var d := MatchData.load_csv(path, sizes.radii(), _move_threshold_m())
 	if d == null:
 		file_label.text = "Failed to load %s" % path.get_file()
 		return
@@ -157,6 +179,7 @@ func load_match(path: String) -> void:
 		_add_ship(pilot)
 	_fetch_models()
 	timeline.max_value = data.duration
+	_build_events()
 	if not ships.has(tracked):
 		tracked = ""
 	if not ships.has(selected):
@@ -250,6 +273,21 @@ func _set_smooth_on(on: bool) -> void:
 		data.smooth = on
 
 
+## Movement needed to start the match (`MatchData.load_csv`): the jitter threshold when that
+## setting is on, else any change of position.
+static func _move_threshold_m() -> float:
+	if not Settings.get_value("match/ignore_jitter"):
+		return 0.0
+	return Settings.get_value("match/jitter_threshold_m")
+
+
+## Saves a match-start setting and reloads the open match, whose start (time 0) may move.
+func _set_match_setting(key: String, value: Variant) -> void:
+	Settings.set_value(key, value)
+	if data != null:
+		load_match(match_path)
+
+
 ## Switches ships and markers between models + icons and spheres + boxes.
 func _apply_visual_mode() -> void:
 	markers_box.visible = not models_on
@@ -270,6 +308,7 @@ func _process(delta: float) -> void:
 			time = data.duration
 			_set_playing(false)
 	_update_ships()
+	_update_mjd_trails()
 	if tracked != "" and ships[tracked].node.visible:
 		camera.set_target(ships[tracked].node.position)
 	if not _scrubbing:
@@ -303,6 +342,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_seek(time - SEEK_STEP_S)
 		KEY_RIGHT:
 			_seek(time + SEEK_STEP_S)
+		KEY_BRACKETLEFT:
+			_jump_event(-1)
+		KEY_BRACKETRIGHT:
+			_jump_event(1)
 
 
 # --- ships -------------------------------------------------------------------
@@ -390,6 +433,59 @@ func _death_marker(pilot: String, death: Dictionary, color: Color) -> Node3D:
 	marker.visible = false
 	ships_root.add_child(marker)
 	return marker
+
+
+# --- events ------------------------------------------------------------------
+
+## Fills the timeline strip with the match's events and draws a line for each micro jump.
+func _build_events() -> void:
+	var marks := []
+	for e in data.events:
+		marks.append({"t": e.t, "color": EVENT_COLORS[e.kind], "text": _event_text(e)})
+	event_strip.set_marks(marks, data.duration)
+	mjd_trails.clear()
+	for e in data.events:
+		if e.kind == MatchData.Event.MJD:
+			mjd_trails.append({"t": e.t, "node": _mjd_trail(e)})
+
+
+## "03:42 Pilot — Podded (Venture)".
+static func _event_text(e: Dictionary) -> String:
+	var what: String = EVENT_NAMES[e.kind]
+	if e.kind == MatchData.Event.MJD:
+		what += " %.0f km" % (e.pos.distance_to(e.to_pos) * M_TO_UNITS)
+	return "%s %s — %s (%s)" % [_fmt_time(e.t), e.pilot, what, e.ship_type]
+
+
+## A line from where a micro jump took off to where it landed; hidden until shown by time.
+func _mjd_trail(e: Dictionary) -> Node3D:
+	var lines := ImmediateMesh.new()
+	lines.surface_begin(Mesh.PRIMITIVE_LINES)
+	lines.surface_add_vertex(e.pos * M_TO_UNITS)
+	lines.surface_add_vertex(e.to_pos * M_TO_UNITS)
+	lines.surface_end()
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = lines
+	mesh.material_override = _material(Color(MJD_COLOR, 0.8), false)
+	mesh.visible = false
+	ships_root.add_child(mesh)
+	return mesh
+
+
+func _update_mjd_trails() -> void:
+	for trail in mjd_trails:
+		trail.node.visible = time >= trail.t and time - trail.t <= MJD_TRAIL_S
+
+
+## Seeks to the lead-up of the next (`dir` 1) or previous (-1) event from now.
+func _jump_event(dir: int) -> void:
+	var targets := data.events.map(func(e): return maxf(e.t - EVENT_LEAD_S, 0.0))
+	if dir < 0:
+		targets.reverse()
+	for t in targets:
+		if (t > time + 0.05) if dir > 0 else (t < time - 0.05):
+			_seek(t)
+			return
 
 
 static func _label(color: Color) -> Label3D:
@@ -602,10 +698,13 @@ func _update_info() -> void:
 		lines.append(now.ship_type)
 		var motion := _motion(selected)
 		if not is_nan(motion.speed):
-			lines.append("Speed: %.0f m/s" % motion.speed)
+			lines.append("Speed: %s" % _fmt_speed(motion.speed))
 		var d: float = motion.dist_km
 		lines.append("From centre: %.1f km (boundary %.1f km)" % [d, BOUNDARY_KM - d])
 	var ship: Dictionary = ships[selected]
+	for e in data.events:
+		if e.pilot == selected and e.kind == MatchData.Event.DEATH and time >= e.t:
+			lines.append("Podded at %s (lost %s)" % [_fmt_time(e.t), e.ship_type])
 	if time >= ship.death_t:
 		lines.append("DEAD (out of bounds at %s)" % _fmt_time(ship.death_t))
 	lines.append("Following" if tracked == selected else "Double-click to follow")
@@ -613,20 +712,15 @@ func _update_info() -> void:
 	info_label.modulate = TEAM_COLORS[team].lerp(Color.WHITE, 0.5)
 
 
-## `pilot`'s ship type, speed (m/s, averaged over a second; NAN if unknown) and distance from the
-## centre (km) at the current time, or {} when it isn't on grid.
+## `pilot`'s ship type, speed (m/s from the CSV's latest sample; NAN if unknown) and distance
+## from the centre (km) at the current time, or {} when it isn't on grid.
 func _motion(pilot: String) -> Dictionary:
 	var now := data.sample(pilot, time)
 	if now.is_empty():
 		return {}
-	var prev := data.sample(pilot, time - 0.5)
-	var next := data.sample(pilot, time + 0.5)
-	var a: Dictionary = prev if not prev.is_empty() else now
-	var b: Dictionary = next if not next.is_empty() else now
-	var speed: float = (b.pos - a.pos).length() / (b.t - a.t) if b.t > a.t else NAN
 	return {
 		"ship_type": now.ship_type,
-		"speed": speed,
+		"speed": now.speed,
 		"dist_km": now.pos.distance_to(MatchData.CENTRE_M) * M_TO_UNITS,
 	}
 
@@ -656,6 +750,14 @@ func _set_playing(p: bool) -> void:
 static func _fmt_time(t: float) -> String:
 	var s := int(t)
 	return "%02d:%02d" % [s / 60, s % 60]
+
+
+## Speed (m/s) for display: whole m/s below 1 km/s, else km/s to 1 decimal. Rounds first so
+## 999.5 shows as 1.0 km/s, never 1000 m/s.
+static func _fmt_speed(mps: float) -> String:
+	if roundf(mps) >= 1000.0:
+		return "%.1f km/s" % (mps / 1000.0)
+	return "%.0f m/s" % mps
 
 
 # --- scene -------------------------------------------------------------------
@@ -856,6 +958,14 @@ func _build_ui() -> void:
 	time_label.text = "--:-- / --:--"
 	row.add_child(time_label)
 
+	for kind in EVENT_COLORS:
+		var key := Label.new()
+		key.text = "▮ %s" % EVENT_NAMES[kind]
+		key.modulate = EVENT_COLORS[kind]
+		key.tooltip_text = "Timeline marker colour ([ / ] jump between events)"
+		key.mouse_filter = Control.MOUSE_FILTER_PASS
+		row.add_child(key)
+
 	var settings_button := Button.new()
 	settings_button.text = "Settings…"
 	settings_button.pressed.connect(func(): settings_popup.popup_centered())
@@ -871,6 +981,10 @@ func _build_ui() -> void:
 	file_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(file_label)
 
+	event_strip = EventStrip.new()
+	event_strip.mark_pressed.connect(func(i): _seek(event_strip.marks[i].t - EVENT_LEAD_S))
+	box.add_child(event_strip)
+
 	timeline = HSlider.new()
 	timeline.step = 0.0
 	timeline.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -878,6 +992,7 @@ func _build_ui() -> void:
 	timeline.drag_started.connect(func(): _scrubbing = true)
 	timeline.drag_ended.connect(func(_changed): _scrubbing = false)
 	box.add_child(timeline)
+	event_strip.slider = timeline
 
 	open_dialog = FileDialog.new()
 	open_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
@@ -941,6 +1056,25 @@ func _build_settings(layer: CanvasLayer) -> void:
 	smooth_setting.button_pressed = smooth_on
 	smooth_setting.toggled.connect(_set_smooth_on)
 	box.add_child(smooth_setting)
+
+	var jitter := HBoxContainer.new()
+	box.add_child(jitter)
+	jitter_setting = CheckBox.new()
+	jitter_setting.text = "Ignore position jitter when finding the match start: movement under"
+	jitter_setting.button_pressed = Settings.get_value("match/ignore_jitter")
+	jitter.add_child(jitter_setting)
+	jitter_spin = SpinBox.new()
+	jitter_spin.min_value = 0.0
+	jitter_spin.max_value = 50000.0
+	jitter_spin.step = 50.0
+	jitter_spin.suffix = "m"
+	jitter_spin.value = Settings.get_value("match/jitter_threshold_m")
+	jitter_spin.editable = jitter_setting.button_pressed
+	jitter.add_child(jitter_spin)
+	jitter_setting.toggled.connect(func(on):
+		jitter_spin.editable = on
+		_set_match_setting("match/ignore_jitter", on))
+	jitter_spin.value_changed.connect(func(v): _set_match_setting("match/jitter_threshold_m", v))
 
 	var status := Label.new()
 	status.text = sizes.status
@@ -1040,7 +1174,7 @@ func _update_roster_cells() -> void:
 			roster_table.set_cell(pilot, "distance", "—")
 		else:
 			roster_table.set_cell(pilot, "ship", motion.ship_type)
-			roster_table.set_cell(pilot, "speed", "—" if is_nan(motion.speed) else "%.0f m/s" % motion.speed)
+			roster_table.set_cell(pilot, "speed", "—" if is_nan(motion.speed) else _fmt_speed(motion.speed))
 			roster_table.set_cell(pilot, "distance", "%.1f km" % motion.dist_km)
 		roster_buttons[pilot].modulate.a = 0.5 if time >= ships[pilot].death_t else 1.0
 

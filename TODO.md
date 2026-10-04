@@ -16,7 +16,6 @@
 - backtrack in time of 100km jump to calculate mjd activaton
 - incoming and outgoing ewar tracking based on combat log
 - togglable vectors for ship movement
-- kills on timeline
 - show mjd activation range
 - instead of one unit 1km, should be 1 unit 1m
 - tooltips
@@ -31,3 +30,4 @@
 - button to re-center on center
 - speed should auto-truncate to km with 1 decimal at or above 1 km/s, and it should not be interpolated instead showing the actual speed value for each step
 - when a ship dies it should sno just a bar for the speed and distance rather then the true distance
+- Ability to sync with audio from scrim
