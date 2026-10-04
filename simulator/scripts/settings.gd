@@ -8,6 +8,8 @@ const DEFAULTS := {
 	"sde/auto_update": true,
 	"display/ship_models": true,
 	"display/smooth_motion": true,
+	# Roster column layout (see `RosterTable`); empty = default columns.
+	"roster/columns": [],
 }
 
 static var _cfg: ConfigFile

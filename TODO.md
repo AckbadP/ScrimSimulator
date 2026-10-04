@@ -29,3 +29,5 @@
 - right side menu should display speed and distance from center
 - ability to center on beacons
 - button to re-center on center
+- speed should auto-truncate to km with 1 decimal at or above 1 km/s, and it should not be interpolated instead showing the actual speed value for each step
+- when a ship dies it should sno just a bar for the speed and distance rather then the true distance

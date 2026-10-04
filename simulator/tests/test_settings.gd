@@ -36,3 +36,7 @@ func test_ship_models_default_on() -> void:
 
 func test_smooth_motion_default_on() -> void:
 	assert_eq(Settings.get_value("display/smooth_motion"), true)
+
+
+func test_roster_columns_default_empty() -> void:
+	assert_eq(Settings.get_value("roster/columns"), [])
