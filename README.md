@@ -46,7 +46,8 @@ found, ships fall back to spheres.
 
 You can also load a CSV with the **Open CSV…** button, or by dropping the file onto the window.
 Controls: Space plays/pauses, ←/→ seek 10 s, the slider scrubs. Left/right drag orbits the camera,
-the wheel zooms, and middle drag pans.
+the wheel zooms, and middle drag pans. Click a ship to select it (its details show top left; Esc
+or clicking empty space clears it), double-click it to follow it with the camera.
 
 ### Tests
 

@@ -70,3 +70,22 @@ func test_middle_drag_pans_target() -> void:
 	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_MIDDLE)
 	assert_ne(cam.target, target)
 	_assert_orbiting(cam)
+
+
+func test_middle_drag_emits_panned() -> void:
+	var cam := _camera()
+	var panned := [false]
+	cam.panned.connect(func(): panned[0] = true)
+	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_LEFT)
+	assert_false(panned[0], "rotate is not a pan")
+	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_MIDDLE)
+	assert_true(panned[0])
+
+
+func test_set_target_recentres() -> void:
+	var cam := _camera()
+	var d: float = cam.distance
+	cam.set_target(Vector3(10, 20, 30))
+	assert_eq(cam.target, Vector3(10, 20, 30))
+	assert_eq(cam.distance, d)
+	_assert_orbiting(cam)
