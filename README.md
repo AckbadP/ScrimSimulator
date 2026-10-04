@@ -61,6 +61,8 @@ Resizing the window shows more of the arena; the UI size is set by **Interface s
 Matches open paused; press Start (or Space/Play) to begin. Controls: Space plays/pauses, ←/→ pause and step one tick (1 s), the slider scrubs. Left drag orbits the camera,
 the wheel zooms, and right drag pans. Click a ship to select it (its details show top left; Esc
 or clicking empty space clears it), double-click it to follow it with the camera.
+Left drag from a ship measures: a sphere grows around it showing its radius and bracketing every ship
+it reaches; drag onto another ship to snap to it and see the hull-to-hull distance to the metre.
 Right-click a ship (in space or in the roster) for its debug menu: a movement vector and any
 number of range spheres. **Debug…** (or D) does the same for every ship at once, sets how far
 ahead vectors project (default 3 s), and shows the beacons' 5 km jump range.
