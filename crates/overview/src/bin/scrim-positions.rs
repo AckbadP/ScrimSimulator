@@ -6,8 +6,15 @@
 //! 100 km cube that every pilot starts inside, and the corners are inferred from the data.
 //! Speed is the overview's own Velocity column. Direction is the slope of the solved positions,
 //! because the overview shows speed only as a scalar.
+//!
+//! With `--chat-log`, the recording is matched against an EVE Local chat log by ScrimTrimmer
+//! (`third_party/ScrimTrimmer`, via `scripts/scrim_trimmer_bridge.py`): it finds the EVE time at
+//! video second 0 from the scene's `chat` rect and the match's CD -> WF/GF window, only that window
+//! is OCR'd, and every CSV row gets its EVE time (`eve_time`) so the data can be lined up with
+//! other EVE logs.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeDelta, Utc};
 use clap::Parser;
 use glyph::Font;
 use overview::layout::Layout;
@@ -20,6 +27,7 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 #[derive(Parser)]
 #[command(name = "scrim-positions", about = "OCR three observers' overviews into per-pilot positions")]
@@ -34,7 +42,126 @@ struct Cli {
     /// Output directory for `<video>.positions.csv`.
     #[arg(long, default_value = "resouces/matches/out")]
     out: PathBuf,
+    /// EVE Local chat log covering the recording (repeatable). Finds the match's CD -> WF/GF
+    /// window and the EVE time base with ScrimTrimmer; only the match is processed, and the CSV
+    /// gains an `eve_time` column.
+    #[arg(long = "chat-log", value_name = "FILE")]
+    chat_logs: Vec<PathBuf>,
+    /// EVE time (UTC) at video second 0. With `--chat-log`, `HH:MM:SS` (skips detecting it from
+    /// the chat region). Without, a full `YYYY-MM-DDTHH:MM:SSZ`: the whole video is processed and
+    /// stamped with EVE times from it.
+    #[arg(long)]
+    t0: Option<String>,
+    /// Which CD -> WF/GF pair to process (1-based) when the video holds more than one.
+    #[arg(long = "match", value_name = "N")]
+    match_n: Option<usize>,
+    /// Use tournament system messages ("30 seconds until match start", "Match completed!") as
+    /// the match window instead of CD and WF/GF.
+    #[arg(long)]
+    tournament: bool,
+    /// Python interpreter that runs the ScrimTrimmer bridge.
+    #[arg(long, env = "SCRIM_PYTHON", default_value = "python3")]
+    python: String,
+    /// The ScrimTrimmer bridge script.
+    #[arg(long, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/scrim_trimmer_bridge.py"))]
+    trimmer_bridge: PathBuf,
     videos: Vec<PathBuf>,
+}
+
+/// The part of a video to process, and the EVE time of its first frame (when known).
+#[derive(Debug, PartialEq)]
+struct Window {
+    start_s: f64,
+    end_s: Option<f64>,
+    eve_origin: Option<DateTime<Utc>>,
+}
+
+/// What `scrim_trimmer_bridge.py` prints.
+#[derive(serde::Deserialize)]
+struct BridgeOutput {
+    t0_utc: String,
+    t0_source: String,
+    pairs: Vec<(u32, u32)>,
+}
+
+/// Run the ScrimTrimmer bridge on `video` and pick its match window.
+fn match_window(cli: &Cli, scene: &Scene, video: &Path) -> Result<Window> {
+    let mut cmd = Command::new(&cli.python);
+    cmd.arg(&cli.trimmer_bridge).arg(video);
+    for log in &cli.chat_logs {
+        cmd.arg("--chat-log").arg(log);
+    }
+    if let Some(t0) = &cli.t0 {
+        cmd.args(["--t0", t0]);
+    } else {
+        let Some(chat) = scene.chat else {
+            bail!(
+                "the scene has no `chat` rect, needed to find the EVE time from the chat log \
+                 (see docs/obs/README.md), and no --t0 was given"
+            );
+        };
+        let (w, h, _) = videoin::probe(video)?;
+        let fractions = [chat.x as f64 / w as f64, chat.y as f64 / h as f64,
+            (chat.x + chat.w) as f64 / w as f64, (chat.y + chat.h) as f64 / h as f64];
+        cmd.arg("--chat-region").args(fractions.map(|f| format!("{f:.6}")));
+    }
+    if cli.tournament {
+        cmd.arg("--tournament");
+    }
+    println!("== {}: finding the match with ScrimTrimmer", video.display());
+    let output = cmd
+        .stderr(Stdio::inherit())
+        .output()
+        .with_context(|| format!("running {} {}", cli.python, cli.trimmer_bridge.display()))?;
+    ensure!(output.status.success(), "ScrimTrimmer bridge failed ({})", output.status);
+    let bridge: BridgeOutput =
+        serde_json::from_slice(&output.stdout).context("parsing the ScrimTrimmer bridge's output")?;
+    let t0: DateTime<Utc> = DateTime::parse_from_rfc3339(&bridge.t0_utc)
+        .with_context(|| format!("bridge t0 {:?}", bridge.t0_utc))?
+        .into();
+    let (cd, wf) = pick_pair(&bridge.pairs, cli.match_n)?;
+    let window = Window {
+        start_s: cd as f64,
+        end_s: Some(wf as f64),
+        eve_origin: Some(t0 + TimeDelta::seconds(cd as i64)),
+    };
+    println!(
+        "  t0 {} ({}); match {cd}s -> {wf}s of video",
+        bridge.t0_utc, bridge.t0_source
+    );
+    Ok(window)
+}
+
+/// The `(cd, wf)` pair to process: the only one, or the `n`th (1-based).
+fn pick_pair(pairs: &[(u32, u32)], n: Option<usize>) -> Result<(u32, u32)> {
+    match (pairs, n) {
+        ([], _) => bail!("no CD -> WF/GF pair found in the chat log within the video"),
+        (_, Some(n)) => pairs.get(n.wrapping_sub(1)).copied().with_context(|| {
+            format!("--match {n}, but the video has {} match(es): {pairs:?}", pairs.len())
+        }),
+        ([only], None) => Ok(*only),
+        (_, None) => bail!(
+            "the video has {} matches (video seconds {pairs:?}); pick one with --match N",
+            pairs.len()
+        ),
+    }
+}
+
+/// `--t0` without a chat log: a full UTC date and time.
+fn parse_t0_utc(s: &str) -> Result<DateTime<Utc>> {
+    if let Ok(t) = DateTime::parse_from_rfc3339(s) {
+        return Ok(t.into());
+    }
+    NaiveDateTime::parse_from_str(s.trim_end_matches('Z'), "%Y-%m-%dT%H:%M:%S")
+        .map(|t| t.and_utc())
+        .with_context(|| format!("--t0 {s:?}: without --chat-log it must be YYYY-MM-DDTHH:MM:SSZ"))
+}
+
+/// EVE time of a CSV tick `t` seconds after `origin`, to the millisecond.
+fn eve_time(origin: DateTime<Utc>, t: f64) -> String {
+    (origin + TimeDelta::milliseconds((t * 1000.0).round() as i64))
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string()
 }
 
 /// How many leading frames to try calibrating on before giving up — the first frame of a match
@@ -72,8 +199,26 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(&cli.out)
         .with_context(|| format!("creating {}", cli.out.display()))?;
 
+    if cli.chat_logs.is_empty() && cli.match_n.is_some() {
+        bail!("--match needs --chat-log");
+    }
+    if let (false, Some(t0)) = (cli.chat_logs.is_empty(), &cli.t0) {
+        NaiveTime::parse_from_str(t0, "%H:%M:%S")
+            .with_context(|| format!("--t0 {t0:?}: with --chat-log it must be HH:MM:SS"))?;
+    }
+
     for video in &cli.videos {
-        process_video(video, &scene, &font, cli.fps, &cli.out)
+        let window = if !cli.chat_logs.is_empty() {
+            match_window(&cli, &scene, video)
+        } else {
+            cli.t0.as_deref().map(parse_t0_utc).transpose().map(|eve_origin| Window {
+                start_s: 0.0,
+                end_s: None,
+                eve_origin,
+            })
+        }
+        .with_context(|| format!("finding the match in {}", video.display()))?;
+        process_video(video, &scene, &font, cli.fps, &cli.out, &window)
             .with_context(|| format!("processing {}", video.display()))?;
     }
     Ok(())
@@ -86,9 +231,16 @@ struct Panel<'a> {
     layout: Layout,
 }
 
-fn process_video(video: &Path, scene: &Scene, font: &Font, fps: f64, out: &Path) -> Result<()> {
+fn process_video(
+    video: &Path,
+    scene: &Scene,
+    font: &Font,
+    fps: f64,
+    out: &Path,
+    window: &Window,
+) -> Result<()> {
     let started = std::time::Instant::now();
-    let mut decoder = videoin::Decoder::open_with_fps(video, Some(fps))?;
+    let mut decoder = videoin::Decoder::open_range(video, Some(fps), window.start_s, window.end_s)?;
     println!(
         "== {}: {}x{}, sampling at {fps} fps",
         video.display(),
@@ -179,8 +331,14 @@ fn process_video(video: &Path, scene: &Scene, font: &Font, fps: f64, out: &Path)
 
     let stem = video.file_stem().unwrap_or_default().to_string_lossy();
     let path = out.join(format!("{stem}.positions.csv"));
-    std::fs::write(&path, positions_csv(&per_observer, &roster, &readings, &solved))?;
+    std::fs::write(
+        &path,
+        positions_csv(&per_observer, &roster, &readings, &solved, window.eve_origin),
+    )?;
     print_summary(&per_observer, &roster, &readings, &solved);
+    if let (Some(origin), Some(first), Some(last)) = (window.eve_origin, times.first(), times.last()) {
+        println!("  EVE time {} -> {}", eve_time(origin, *first), eve_time(origin, *last));
+    }
     println!(
         "  wrote {} ({} frames in {:.0}s)",
         path.display(),
@@ -354,12 +512,14 @@ fn csv_field(s: &str) -> String {
 }
 
 /// One line per (tick, pilot) with a position fix. Speed is blank where no observer could read
-/// it. Direction is blank where the ship is stationary or too few fixes surround the tick.
+/// it. Direction is blank where the ship is stationary or too few fixes surround the tick. With
+/// `eve_origin` (the EVE time at `t` = 0), each line ends with its EVE time.
 fn positions_csv(
     per_observer: &[Vec<Track>],
     roster: &[Pilot],
     readings: &[PilotReadings],
     solved: &[Vec<Fix>],
+    eve_origin: Option<DateTime<Utc>>,
 ) -> String {
     let mut rows: Vec<(f64, String)> = Vec::new();
     for ((pilot, r), fixes) in roster.iter().zip(readings).zip(solved) {
@@ -382,13 +542,18 @@ fn positions_csv(
                 }
                 None => line.push_str(",,,"),
             }
-            let _ = writeln!(line, ",{:.0}", f.residual_m);
+            let _ = write!(line, ",{:.0}", f.residual_m);
+            if let Some(origin) = eve_origin {
+                let _ = write!(line, ",{}", eve_time(origin, f.t));
+            }
+            line.push('\n');
             rows.push((f.t, line));
         }
     }
     // Tick-major like the old wide CSV; the sort is stable, so pilots stay in roster order.
     rows.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut out = String::from("t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m\n");
+    let mut out = String::from("t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m");
+    out.push_str(if eve_origin.is_some() { ",eve_time\n" } else { "\n" });
     out.extend(rows.into_iter().map(|(_, l)| l));
     out
 }
@@ -431,4 +596,60 @@ fn print_summary(
     let n_tracks: usize = per_observer.iter().map(Vec::len).sum();
     let n_kept: usize = roster.iter().map(|p| p.members.len()).sum();
     println!("  ({} of {n_tracks} per-observer tracks merged into {} pilots; rest dropped as noise)", n_kept, roster.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn utc(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().into()
+    }
+
+    #[test]
+    fn eve_time_formats_ticks_across_midnight() {
+        let origin = utc("2026-04-04T23:59:58Z");
+        assert_eq!(eve_time(origin, 0.0), "2026-04-04T23:59:58.000Z");
+        assert_eq!(eve_time(origin, 1.5), "2026-04-04T23:59:59.500Z");
+        assert_eq!(eve_time(origin, 3.0), "2026-04-05T00:00:01.000Z");
+    }
+
+    #[test]
+    fn t0_without_log_needs_a_date() {
+        assert_eq!(parse_t0_utc("2026-04-04T17:43:55Z").unwrap(), utc("2026-04-04T17:43:55Z"));
+        assert_eq!(parse_t0_utc("2026-04-04T17:43:55").unwrap(), utc("2026-04-04T17:43:55Z"));
+        assert!(parse_t0_utc("17:43:55").is_err());
+    }
+
+    #[test]
+    fn pair_selection() {
+        assert!(pick_pair(&[], None).is_err());
+        assert_eq!(pick_pair(&[(4, 38)], None).unwrap(), (4, 38));
+        let two = [(8, 41), (59, 95)];
+        assert!(pick_pair(&two, None).is_err());
+        assert_eq!(pick_pair(&two, Some(2)).unwrap(), (59, 95));
+        assert!(pick_pair(&two, Some(0)).is_err());
+        assert!(pick_pair(&two, Some(3)).is_err());
+    }
+
+    #[test]
+    fn bridge_output_parses() {
+        let b: BridgeOutput = serde_json::from_str(
+            r#"{"t0_utc": "2026-04-04T17:52:22Z", "t0_source": "provided", "duration_s": 99.6,
+                "pairs": [[8, 41], [59, 95]]}"#,
+        )
+        .unwrap();
+        assert_eq!(b.pairs, vec![(8, 41), (59, 95)]);
+        assert_eq!(b.t0_utc, "2026-04-04T17:52:22Z");
+    }
+
+    #[test]
+    fn scene_chat_rect_is_optional() {
+        let without: Scene = serde_json::from_str(r#"{"panels": []}"#).unwrap();
+        assert!(without.chat.is_none());
+        let with: Scene =
+            serde_json::from_str(r#"{"panels": [], "chat": {"x": 0, "y": 1200, "w": 1280, "h": 400}}"#)
+                .unwrap();
+        assert_eq!(with.chat.unwrap().y, 1200);
+    }
 }

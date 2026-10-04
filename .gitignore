@@ -6,6 +6,8 @@
 simulator/.godot/
 simulator/android/
 simulator/export/
+# Temporary viewport size override written by scripts/readme_gifs.sh
+simulator/override.cfg
 
 # Match data (recordings, scene configs, extracted CSVs) — kept local, never committed
 resouces/matches/
@@ -16,3 +18,6 @@ simulator/sde/
 # Build output (scripts/build.sh)
 /dist/
 /.cache/
+
+# Python bytecode (scripts/)
+__pycache__/

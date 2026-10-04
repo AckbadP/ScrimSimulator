@@ -1,7 +1,8 @@
 class_name MatchData
 extends RefCounted
 ## Per-pilot position tracks loaded from a `scrim-positions` CSV:
-## `t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m`.
+## `t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m`, plus `eve_time` (each
+## tick's EVE time, ISO 8601 UTC) when it was made with `--chat-log` or `--t0`.
 ## Positions are metres in the observers' cube frame (0..100 km per axis).
 
 ## Samples further apart than this are treated as a gap: the ship is hidden in between.
@@ -18,22 +19,57 @@ const BOUNDARY_RADIUS_M := 125000.0
 const CENTRE_RADIUS_M := 10000.0
 ## Max distance of a pilot's first position from a corner->centre line to count as on it.
 const LINE_TOLERANCE_M := 10000.0
+## A micro jump drive teleports its ship this far ahead; a hop between consecutive samples within
+## `MJD_TOLERANCE_M` of it (and no longer than a gap apart) is taken as an MJD. Capsules can't fit
+## one, which keeps pod warps out.
+const MJD_DISTANCE_M := 100000.0
+const MJD_TOLERANCE_M := 15000.0
+const CAPSULE := "Capsule"
 
-## pilot name -> Array of { t: float, pos: Vector3 (metres), ship_type: String }, sorted by t.
+enum Event { DEATH, BOUNDARY, MJD }
+
+## pilot name -> Array of { t: float, pos: Vector3 (metres), ship_type: String, speed: float
+## (m/s as read from the overview; NAN if the CSV has none) }, sorted by t.
+## A sample its ship micro jumped to also has `mjd: true`; with an `eve_time` column, every sample
+## has `eve_time: String`.
 var tracks: Dictionary = {}
 ## pilot name -> Team, from each pilot's first position.
 var teams: Dictionary = {}
 ## pilot name -> { t: float (match time, s since start), pos: Vector3 (metres) } where the
 ## pilot first crossed the arena boundary. Pilots who never left are absent.
 var deaths: Dictionary = {}
+## Notable moments, sorted by t: Array of { t: float (match time), pilot: String, kind: Event,
+## pos: Vector3 (metres), ship_type: String (hull lost / flown) }; MJDs add `to_pos`, where the
+## ship landed (`pos` is where it jumped from).
+var events: Array = []
 ## Lowercase ship type -> published hull radius in metres (from `ShipSizes`); unknown types
 ## count as points.
 var radii: Dictionary = {}
+## CSV time of match time 0: just before the first ship moves (or the first sample if none do,
+## or if the lead-in is kept).
 var start_time := 0.0
+## Match time of the last sample.
 var duration := 0.0
+## EVE time (ISO 8601 UTC) of the CSV's first and last sample, for lining the match up with other
+## EVE logs; "" when the CSV has no `eve_time` column.
+var eve_start := ""
+var eve_end := ""
+## `eve_start` / `eve_end` as unix seconds (NAN without `eve_time`).
+var eve_unix_start := NAN
+var eve_unix_end := NAN
+## CSV time of the first sample (whose EVE time is `eve_start`).
+var first_t := 0.0
+## `CombatLog`s of this match, synced to it; filled in by whoever loads the match.
+var combat_logs: Array = []
+## Follow a Catmull-Rom spline through the samples instead of straight lines between them.
+var smooth := false
 
 
-static func load_csv(path: String, ship_radii := {}) -> MatchData:
+## A ship further than `move_threshold_m` from its first sample has started moving; the match
+## (time 0) begins at the sample before the earliest such move, skipping the pre-match countdown.
+## 0 counts any change of position. `keep_lead_in` starts the match at the first sample instead
+## (a match with audio, which starts there too).
+static func load_csv(path: String, ship_radii := {}, move_threshold_m := 0.0, keep_lead_in := false) -> MatchData:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		push_error("Cannot open %s: %s" % [path, error_string(FileAccess.get_open_error())])
@@ -51,6 +87,8 @@ static func load_csv(path: String, ship_radii := {}) -> MatchData:
 	data.radii = ship_radii
 	var t_min := INF
 	var t_max := -INF
+	var speed_col: int = col.get("speed_mps", -1)
+	var eve_col: int = col.get("eve_time", -1)
 	while not f.eof_reached():
 		var row := f.get_csv_line()
 		if row.size() < header.size():
@@ -64,7 +102,14 @@ static func load_csv(path: String, ship_radii := {}) -> MatchData:
 			"t": t,
 			"pos": Vector3(float(x), float(row[col["y_m"]]), float(row[col["z_m"]])),
 			"ship_type": row[col["ship_type"]],
+			"speed": _parse_speed(row[speed_col]) if speed_col >= 0 else NAN,
 		}
+		if eve_col >= 0:
+			s.eve_time = row[eve_col]
+			if t < t_min:
+				data.eve_start = s.eve_time
+			if t > t_max:
+				data.eve_end = s.eve_time
 		if not data.tracks.has(pilot):
 			data.tracks[pilot] = []
 		data.tracks[pilot].append(s)
@@ -76,11 +121,60 @@ static func load_csv(path: String, ship_radii := {}) -> MatchData:
 		return null
 	for pilot in data.tracks:
 		data.tracks[pilot].sort_custom(func(a, b): return a.t < b.t)
-	data.start_time = t_min
-	data.duration = t_max - t_min
+	var first_move := INF if keep_lead_in else data._find_start(move_threshold_m)
+	data.start_time = first_move if first_move < INF else t_min
+	data.first_t = t_min
+	if not data.eve_start.is_empty():
+		data.eve_unix_start = CombatLog.parse_eve_time(data.eve_start)
+		data.eve_unix_end = CombatLog.parse_eve_time(data.eve_end)
+	data.duration = t_max - data.start_time
 	data._assign_teams()
+	data._find_mjds()
 	data._find_deaths()
+	data._find_events()
 	return data
+
+
+## Whether samples carry EVE times, so other EVE logs can be lined up with the match.
+func has_eve_time() -> bool:
+	return not is_nan(eve_unix_start)
+
+
+## EVE time (unix s) at match time `t`; NAN without EVE times.
+func eve_unix_at(t: float) -> float:
+	return eve_unix_start + (start_time - first_t) + t
+
+
+## EVE times (unix s) other logs are kept for: the CSV's span, `MAX_GAP_S` either side (their
+## times are whole seconds): `[first, last]` (`Vector2` is too coarse for unix times).
+func eve_window() -> PackedFloat64Array:
+	return PackedFloat64Array([eve_unix_start - MAX_GAP_S, eve_unix_end + MAX_GAP_S])
+
+
+## Match time at EVE time `eve_unix` (unix s); NAN without EVE times.
+func match_time_of(eve_unix: float) -> float:
+	return eve_unix - eve_unix_start - (start_time - first_t)
+
+
+## Overview speed cell -> m/s, or NAN when blank.
+static func _parse_speed(cell: String) -> float:
+	cell = cell.strip_edges()
+	return NAN if cell.is_empty() else float(cell)
+
+
+## CSV time of the sample before the earliest move of any ship (beyond `threshold_m` from its
+## first sample), or INF if no ship ever moves.
+func _find_start(threshold_m: float) -> float:
+	var start := INF
+	for pilot in tracks:
+		var track: Array = tracks[pilot]
+		for i in range(1, track.size()):
+			if track[i - 1].t >= start:
+				break
+			if track[i].pos.distance_to(track[0].pos) > threshold_m:
+				start = track[i - 1].t
+				break
+	return start
 
 
 ## Puts each pilot on the corner->centre line nearest its first position; the two most
@@ -128,13 +222,58 @@ func _find_deaths() -> void:
 			var limit := maxf(BOUNDARY_RADIUS_M - radius_m(b.ship_type), 0.0)
 			if b.pos.distance_to(CENTRE_M) <= limit:
 				continue
-			if i == 0:
-				deaths[pilot] = {"t": b.t - start_time, "pos": b.pos}
+			if i == 0 or b.get("mjd", false):
+				# A jump teleports: the ship is outside the moment it lands.
+				deaths[pilot] = {"t": maxf(b.t - start_time, 0.0), "pos": b.pos}
 			else:
 				var a: Dictionary = track[i - 1]
 				var w := _boundary_crossing(a.pos, b.pos, limit)
-				deaths[pilot] = {"t": lerpf(a.t, b.t, w) - start_time, "pos": a.pos.lerp(b.pos, w)}
+				deaths[pilot] = {
+					"t": maxf(lerpf(a.t, b.t, w) - start_time, 0.0), "pos": a.pos.lerp(b.pos, w),
+				}
 			break
+
+
+## Flags samples a ship micro jumped to: an MJD-length hop from the previous sample, neither a
+## capsule nor across a gap.
+func _find_mjds() -> void:
+	for pilot in tracks:
+		var track: Array = tracks[pilot]
+		for i in range(1, track.size()):
+			var a: Dictionary = track[i - 1]
+			var b: Dictionary = track[i]
+			if a.ship_type == CAPSULE or b.ship_type == CAPSULE or b.t - a.t > MAX_GAP_S:
+				continue
+			if absf(a.pos.distance_to(b.pos) - MJD_DISTANCE_M) <= MJD_TOLERANCE_M:
+				b.mjd = true
+
+
+## Collects podding (first capsule sample after a hull), boundary crossings and MJDs into `events`.
+func _find_events() -> void:
+	events.clear()
+	for pilot in tracks:
+		var track: Array = tracks[pilot]
+		for i in range(1, track.size()):
+			var a: Dictionary = track[i - 1]
+			var b: Dictionary = track[i]
+			var t: float = b.t - start_time
+			if t < 0.0:
+				continue  # before the match started
+			if b.ship_type == CAPSULE and a.ship_type != CAPSULE:
+				events.append({"t": t, "pilot": pilot, "kind": Event.DEATH, "pos": b.pos, "ship_type": a.ship_type})
+			if b.get("mjd", false):
+				events.append({
+					"t": t, "pilot": pilot, "kind": Event.MJD, "pos": a.pos, "to_pos": b.pos,
+					"ship_type": a.ship_type,
+				})
+		if deaths.has(pilot):
+			var death: Dictionary = deaths[pilot]
+			var s := sample(pilot, death.t)
+			events.append({
+				"t": death.t, "pilot": pilot, "kind": Event.BOUNDARY, "pos": death.pos,
+				"ship_type": s.get("ship_type", track[0].ship_type),
+			})
+	events.sort_custom(func(a, b): return a.t < b.t)
 
 
 ## Fraction w in [0, 1] along a->b (a inside, b outside) where the segment hits the sphere of
@@ -153,6 +292,7 @@ static func _boundary_crossing(a: Vector3, b: Vector3, r: float) -> float:
 
 ## Interpolated state of `pilot` at match time `t` (seconds since start), or an empty
 ## Dictionary when the pilot has no data then (before first / after last sample, or in a gap).
+## Ship type and speed aren't interpolated: they're those of the latest sample at or before `t`.
 func sample(pilot: String, t: float) -> Dictionary:
 	var track: Array = tracks[pilot]
 	t += start_time
@@ -166,5 +306,22 @@ func sample(pilot: String, t: float) -> Dictionary:
 	var b: Dictionary = track[i]
 	if b.t - a.t > MAX_GAP_S:
 		return {}
+	if b.get("mjd", false):
+		# Micro jumps are instant: hold the take-off point until the landing sample.
+		return {"t": t, "pos": a.pos, "ship_type": a.ship_type, "speed": a.speed}
 	var w: float = (t - a.t) / (b.t - a.t)
-	return {"t": t, "pos": a.pos.lerp(b.pos, w), "ship_type": a.ship_type}
+	if not smooth:
+		return {"t": t, "pos": a.pos.lerp(b.pos, w), "ship_type": a.ship_type, "speed": a.speed}
+	var pre := _neighbour(track, i - 2, a, b, a.get("mjd", false))
+	var post := _neighbour(track, i + 1, b, a, i + 1 < track.size() and track[i + 1].get("mjd", false))
+	var pos: Vector3 = a.pos.cubic_interpolate_in_time(
+			b.pos, pre.pos, post.pos, w, b.t - a.t, pre.t - a.t, post.t - a.t)
+	return {"t": t, "pos": pos, "ship_type": a.ship_type, "speed": a.speed}
+
+
+## Spline control point beyond `end` (away from `other`): `track[j]` if it exists and isn't
+## across a gap or a micro jump (`jump`), else `other` mirrored through `end`.
+static func _neighbour(track: Array, j: int, end: Dictionary, other: Dictionary, jump := false) -> Dictionary:
+	if not jump and j >= 0 and j < track.size() and absf(track[j].t - end.t) <= MAX_GAP_S:
+		return track[j]
+	return {"t": end.t * 2.0 - other.t, "pos": end.pos * 2.0 - other.pos}

@@ -58,7 +58,7 @@ fn parse_frame_rate(s: &str) -> Result<f64> {
 }
 
 /// Probe a video's first video stream for width/height/fps via `ffprobe`.
-fn probe(path: &std::path::Path) -> Result<(u32, u32, f64)> {
+pub fn probe(path: &std::path::Path) -> Result<(u32, u32, f64)> {
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -107,14 +107,37 @@ impl Decoder {
     /// source rate). Sampling a long recording at a few Hz this way avoids piping every
     /// full-resolution frame only to discard most of them; `Frame::t` is then `index / fps`.
     pub fn open_with_fps(path: impl AsRef<std::path::Path>, fps: Option<f64>) -> Result<Decoder> {
+        Decoder::open_range(path, fps, 0.0, None)
+    }
+
+    /// Like [`Decoder::open_with_fps`], but only the video from `start_s` to `end_s` (`None`: the
+    /// end). `Frame::t` counts from `start_s`. The seek is frame-accurate: ffmpeg decodes from the
+    /// keyframe before `start_s` and drops frames up to it, unlike a stream-copy cut.
+    pub fn open_range(
+        path: impl AsRef<std::path::Path>,
+        fps: Option<f64>,
+        start_s: f64,
+        end_s: Option<f64>,
+    ) -> Result<Decoder> {
         let path = path.as_ref();
         let (width, height, src_fps) = probe(path)?;
         if let Some(f) = fps {
             ensure!(f > 0.0, "fps must be positive, got {f}");
         }
+        ensure!(start_s >= 0.0, "start must not be negative, got {start_s}");
+        if let Some(end) = end_s {
+            ensure!(end > start_s, "end ({end}) must be after start ({start_s})");
+        }
 
         let mut cmd = Command::new("ffmpeg");
-        cmd.args(["-v", "error", "-i"]).arg(path).args(["-map", "0:v:0"]);
+        cmd.args(["-v", "error"]);
+        if start_s > 0.0 {
+            cmd.args(["-ss", &format!("{start_s}")]);
+        }
+        cmd.arg("-i").arg(path).args(["-map", "0:v:0"]);
+        if let Some(end) = end_s {
+            cmd.args(["-t", &format!("{}", end - start_s)]);
+        }
         if let Some(f) = fps {
             cmd.args(["-vf", &format!("fps={f}")]);
         }
@@ -202,5 +225,20 @@ mod tests {
         assert_eq!(parse_frame_rate("60/1").unwrap(), 60.0);
         assert_eq!(parse_frame_rate("30000/1001").unwrap(), 30000.0 / 1001.0);
         assert_eq!(parse_frame_rate("25").unwrap(), 25.0);
+    }
+
+    /// The overview crate's sample recording, decoded whole and as a sub-range.
+    const SAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../overview/tests/fixtures/overview-sample.mkv");
+
+    #[test]
+    fn range_decodes_only_the_window() {
+        let whole = Decoder::open_with_fps(SAMPLE, Some(1.0)).unwrap().count();
+        assert!(whole > 4, "fixture too short: {whole} frames");
+        let frames: Vec<Frame> =
+            Decoder::open_range(SAMPLE, Some(1.0), 1.0, Some(3.0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].t, 0.0);
+        let tail = Decoder::open_range(SAMPLE, Some(1.0), 2.0, None).unwrap().count();
+        assert_eq!(tail, whole - 2);
     }
 }

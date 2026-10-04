@@ -1,0 +1,6 @@
+# Python packages for scripts/scrim_trimmer_bridge.py (scrim-positions --chat-log).
+# Also needs the tesseract-ocr and ffmpeg system packages.
+numpy
+opencv-python
+pillow
+pytesseract

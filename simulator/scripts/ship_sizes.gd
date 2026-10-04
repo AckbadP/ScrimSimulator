@@ -19,7 +19,6 @@ const ZIP_URL := SDE_BASE + "/eve-online-static-data-latest-jsonl.zip"
 const CHANGES_URL := SDE_BASE + "/tranquility/changes/%d.jsonl"
 const ESI_TYPE_URL := "https://esi.evetech.net/latest/universe/types/%d/"
 const ESI_GROUP_URL := "https://esi.evetech.net/latest/universe/groups/%d/"
-const HEADERS := ["User-Agent: scrimSimulator (EVE scrim replay tool)"]
 
 const SHIP_CATEGORY := 6
 ## Further back than this many builds, re-download the full SDE instead of walking changes.
@@ -29,35 +28,32 @@ const ESI_WORKERS := 8
 ## SDE build the cache reflects (0 = no cache).
 var build := 0
 var release_date := ""
-var ship_groups := {}  # group id -> true
+var ship_groups := {}  # group id -> group name ("" if unknown)
 var ships := {}  # lowercase ship name -> { name, type_id, group_id, radius_m }
 var busy := false
 var status := ""
 
 var _dir := ""
-var _download: HTTPRequest
 var _thread: Thread
 
 
 func _ready() -> void:
-	# Next to the project when run from source, next to the executable when exported.
-	if OS.has_feature("editor"):
-		_dir = ProjectSettings.globalize_path("res://sde")
-	else:
-		_dir = OS.get_executable_path().get_base_dir().path_join("sde")
+	_dir = data_dir()
 	_load_cache()
 
 
-func _process(_delta: float) -> void:
-	if _download == null:
-		set_process(false)
-		return
-	var got := _download.get_downloaded_bytes()
-	var total := _download.get_body_size()
+## `sde/` next to the project when run from source, next to the executable when exported.
+static func data_dir() -> String:
+	if OS.has_feature("editor"):
+		return ProjectSettings.globalize_path("res://sde")
+	return OS.get_executable_path().get_base_dir().path_join("sde")
+
+
+## Status text for a download of `what` that has `got` of `total` bytes (-1 = unknown).
+static func progress_text(what: String, got: int, total: int) -> String:
 	if total > 0:
-		_set_status("Downloading SDE… %d / %d MB" % [got >> 20, total >> 20])
-	else:
-		_set_status("Downloading SDE… %d MB" % (got >> 20))
+		return "Downloading %s… %d / %d MB" % [what, got >> 20, total >> 20]
+	return "Downloading %s… %d MB" % [what, got >> 20]
 
 
 func _exit_tree() -> void:
@@ -81,6 +77,11 @@ func radii() -> Dictionary:
 func radius_m(ship_type: String) -> float:
 	var s: Dictionary = ships.get(ship_type.to_lower(), {})
 	return s.get("radius_m", 0.0)
+
+
+## SDE record { name, type_id, group_id, radius_m } of `ship_type`, or {} if unknown.
+func ship(ship_type: String) -> Dictionary:
+	return ships.get(ship_type.to_lower(), {})
 
 
 ## Startup entry point: load what's cached, then prompt for or check for updates.
@@ -115,20 +116,11 @@ func full_download() -> void:
 	DirAccess.make_dir_recursive_absolute(_dir)
 	# Keep the Godot editor from importing anything in here.
 	FileAccess.open(_dir.path_join(".gdignore"), FileAccess.WRITE)
-	_download = HTTPRequest.new()
-	_download.download_file = _dir.path_join("sde.zip")
-	_download.download_chunk_size = 1 << 16
-	add_child(_download)
 	_set_status("Downloading SDE…")
-	set_process(true)
-	var err := _download.request(ZIP_URL, HEADERS)
-	var result: Array = [HTTPRequest.RESULT_CANT_CONNECT, 0]
-	if err == OK:
-		result = await _download.request_completed
-	_download.queue_free()
-	_download = null
-	if result[0] != HTTPRequest.RESULT_SUCCESS or result[1] != 200:
-		_fail("SDE download failed (result %d, HTTP %d)" % [result[0], result[1]])
+	var r := await Http.fetch(self, ZIP_URL, [], _dir.path_join("sde.zip"),
+		func(got, total): _set_status(progress_text("SDE", got, total)))
+	if not r.ok:
+		_fail("SDE download failed (result %d, HTTP %d)" % [r.result, r.code])
 		DirAccess.remove_absolute(_dir.path_join("sde.zip"))
 		return
 	_set_status("Extracting ship sizes…")
@@ -138,18 +130,22 @@ func full_download() -> void:
 
 ## Runs on `_thread`: pulls ship groups and ship types out of the SDE zip.
 func _parse_zip(path: String) -> void:
+	_finish_parse.call_deferred(_extract_ships(path))
+
+
+## Returns { error, groups, ships, build, release_date } read from the SDE zip at `path`.
+static func _extract_ships(path: String) -> Dictionary:
 	var out := {"error": ""}
 	var zip := ZIPReader.new()
 	if zip.open(path) != OK:
 		out.error = "Cannot open %s" % path
-		_finish_parse.call_deferred(out)
-		return
+		return out
 
 	var meta := _parse_jsonl(zip.read_file("_sde.jsonl").get_string_from_utf8())
 	var groups := {}
 	for g in _parse_jsonl(zip.read_file("groups.jsonl").get_string_from_utf8()):
 		if int(g.get("categoryID", -1)) == SHIP_CATEGORY:
-			groups[int(g._key)] = true
+			groups[int(g._key)] = _en(g.get("name", ""))
 
 	# types.jsonl is ~150 MB of mostly non-ships: split on newlines in the raw bytes and only
 	# JSON-parse the lines whose groupID is a ship group.
@@ -171,7 +167,7 @@ func _parse_zip(path: String) -> void:
 			continue
 		var t = JSON.parse_string(line)
 		if t is Dictionary and t.get("published", false):
-			var name: String = t.name.en if t.name is Dictionary else str(t.name)
+			var name := _en(t.name)
 			found[name.to_lower()] = {
 				"name": name, "type_id": int(t._key), "group_id": gid, "radius_m": float(t.get("radius", 0.0)),
 			}
@@ -186,7 +182,7 @@ func _parse_zip(path: String) -> void:
 			out.release_date = str(m.get("releaseDate", ""))
 	if found.is_empty() or out.build == 0:
 		out.error = "SDE zip has no ship types"
-	_finish_parse.call_deferred(out)
+	return out
 
 
 func _finish_parse(out: Dictionary) -> void:
@@ -269,7 +265,7 @@ func check_update() -> void:
 		if g.is_empty():
 			ok = false
 		elif int(g.get("category_id", -1)) == SHIP_CATEGORY:
-			ship_groups[gid] = true
+			ship_groups[gid] = str(g.get("name", ""))
 
 	# New types might be ships; changed types only matter if they already are.
 	var known := {}
@@ -339,17 +335,11 @@ func _fail(text: String) -> void:
 
 ## GETs `url`; returns the body, or an empty array on any failure.
 func _get_bytes(url: String) -> PackedByteArray:
-	var req := HTTPRequest.new()
-	req.timeout = 30.0
-	add_child(req)
-	var result: Array = [HTTPRequest.RESULT_CANT_CONNECT, 0, [], PackedByteArray()]
-	if req.request(url, HEADERS) == OK:
-		result = await req.request_completed
-	req.queue_free()
-	if result[0] != HTTPRequest.RESULT_SUCCESS or result[1] != 200:
-		push_warning("GET %s failed (result %d, HTTP %d)" % [url, result[0], result[1]])
+	var r := await Http.fetch(self, url)
+	if not r.ok:
+		push_warning("GET %s failed (result %d, HTTP %d)" % [url, r.result, r.code])
 		return PackedByteArray()
-	return result[3]
+	return r.body
 
 
 func _get_json(url: String) -> Dictionary:
@@ -359,6 +349,11 @@ func _get_json(url: String) -> Dictionary:
 
 func _get_jsonl(url: String) -> Array:
 	return _parse_jsonl((await _get_bytes(url)).get_string_from_utf8())
+
+
+## English text of an SDE name field (`{"en": ..., "de": ...}` or a plain string).
+static func _en(v: Variant) -> String:
+	return str(v.get("en", "")) if v is Dictionary else str(v)
 
 
 static func _parse_jsonl(text: String) -> Array:
@@ -386,8 +381,13 @@ func _load_cache() -> void:
 	build = int(d.get("build", 0))
 	release_date = str(d.get("release_date", ""))
 	ship_groups.clear()
-	for g in d.get("ship_groups", []):
-		ship_groups[int(g)] = true
+	var groups = d.get("ship_groups", {})
+	if groups is Array:  # Caches before group names were kept.
+		for g in groups:
+			ship_groups[int(g)] = ""
+	else:
+		for g in groups:
+			ship_groups[int(g)] = str(groups[g])
 	ships.clear()
 	for name in d.ships:
 		var s: Dictionary = d.ships[name]
@@ -406,7 +406,7 @@ func _save_cache() -> void:
 		out[s.name] = {"type_id": s.type_id, "group_id": s.group_id, "radius_m": s.radius_m}
 	var d := {
 		"build": build, "release_date": release_date,
-		"ship_groups": ship_groups.keys(), "ships": out,
+		"ship_groups": ship_groups, "ships": out,
 	}
 	var f := FileAccess.open(_cache_path(), FileAccess.WRITE)
 	if f == null:
