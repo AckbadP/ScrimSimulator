@@ -6,6 +6,7 @@
 - may bug when ship comes close enough that distance becomes m instead of km
 - output exact eve time of each tick so it can be more easily synced with other data
 - bug where some ships seem to be moved out of bounds erroneously
+- I should be able to give this a video file and log file get the data I need. It can use the scrimTrimmer do the truncation, but this proccess should preserve the eve timestamps of every tic so it can be synced with other log files later
 
 ## Test data (resouces)
 
