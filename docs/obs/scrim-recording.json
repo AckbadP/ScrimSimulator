@@ -272,10 +272,10 @@
                 "show_cursor": false,
                 "include_border": false,
                 "exclude_alpha": false,
-                "cut_top": 0,
-                "cut_left": 0,
+                "cut_top": 80,
+                "cut_left": 1240,
                 "cut_right": 0,
-                "cut_bot": 0
+                "cut_bot": 370
             },
             "mixers": 0,
             "sync": 0,
@@ -305,10 +305,10 @@
                 "show_cursor": false,
                 "include_border": false,
                 "exclude_alpha": false,
-                "cut_top": 0,
-                "cut_left": 0,
+                "cut_top": 80,
+                "cut_left": 1240,
                 "cut_right": 0,
-                "cut_bot": 0
+                "cut_bot": 370
             },
             "mixers": 0,
             "sync": 0,
@@ -338,10 +338,10 @@
                 "show_cursor": false,
                 "include_border": false,
                 "exclude_alpha": false,
-                "cut_top": 0,
-                "cut_left": 0,
+                "cut_top": 80,
+                "cut_left": 1240,
                 "cut_right": 0,
-                "cut_bot": 0
+                "cut_bot": 370
             },
             "mixers": 0,
             "sync": 0,
@@ -371,10 +371,10 @@
                 "show_cursor": false,
                 "include_border": false,
                 "exclude_alpha": false,
-                "cut_top": 0,
-                "cut_left": 0,
-                "cut_right": 0,
-                "cut_bot": 0
+                "cut_top": 1060,
+                "cut_left": 1990,
+                "cut_right": 80,
+                "cut_bot": 50
             },
             "mixers": 0,
             "sync": 0,
