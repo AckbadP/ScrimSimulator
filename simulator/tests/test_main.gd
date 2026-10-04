@@ -578,6 +578,8 @@ func test_roster_shows_speed_and_distance() -> void:
 	assert_eq(m.roster_table.cell_text("late", "speed"), "0 m/s")
 	assert_eq(m.roster_table.cell_text("late", "distance"), "0.0 km")
 	assert_almost(m.roster_buttons["runner"].modulate.a, 0.5, 1e-3, "out-of-bounds pilot dimmed")
+	assert_eq(m.roster_table.cell_text("runner", "speed"), "—", "dead pilot")
+	assert_eq(m.roster_table.cell_text("runner", "distance"), "—")
 	assert_almost(m.roster_buttons["blue"].modulate.a, 1.0)
 
 
