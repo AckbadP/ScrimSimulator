@@ -175,7 +175,7 @@ func test_death_marks_ship() -> void:
 ## Team header labels and the pilots of the buttons in roster order, e.g. ["Blue (1)", "blue", ...].
 func _roster(m: Main) -> Array:
 	var out := []
-	for c in m.roster_box.get_children():
+	for c in m.roster_table.body.get_children():
 		if c is Label:
 			out.append(c.text)
 		else:
@@ -195,7 +195,8 @@ func test_roster_lists_teams() -> void:
 	m.load_match(_match_csv())
 	assert_true(m.roster_panel.visible)
 	assert_eq(_roster(m), ["Blue (1)", "blue", "Red (1)", "red", "Unknown (2)", "late", "runner"])
-	assert_eq(m.roster_buttons["blue"].text, "Test Hull — blue")
+	assert_eq(m.roster_table.cell_text("blue", "ship"), "Test Hull")
+	assert_eq(m.roster_table.cell_text("blue", "pilot"), "blue")
 
 
 func test_roster_sorts_by_ship_type_and_abbreviates() -> void:
@@ -206,7 +207,8 @@ func test_roster_sorts_by_ship_type_and_abbreviates() -> void:
 		row(0, "Bob Pilot", "Atron", C), row(1, "Bob Pilot", "Atron", C),
 	]))
 	assert_eq(_roster(m), ["Blue (0)", "Red (0)", "Unknown (3)", "Bob Pilot", "Zed Pilot", "Amy Pilot"])
-	assert_eq(m.roster_buttons["Bob Pilot"].text, "Atron — Bob P.")
+	assert_eq(m.roster_table.cell_text("Bob Pilot", "ship"), "Atron")
+	assert_eq(m.roster_table.cell_text("Bob Pilot", "pilot"), "Bob P.")
 	assert_eq(m.roster_buttons["Bob Pilot"].tooltip_text, "Centre the camera on Bob Pilot")
 
 
@@ -216,6 +218,32 @@ func test_roster_hides_empty_unknown_group() -> void:
 	m._swap_team("late")
 	m._swap_team("runner")
 	assert_eq(_roster(m), ["Blue (3)", "blue", "late", "runner", "Red (1)", "red"])
+
+
+func test_roster_shows_speed_and_distance() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._seek(2.0)
+	m._process(0.0)
+	var motion := m._motion("blue")
+	assert_eq(m.roster_table.cell_text("blue", "speed"), "%.0f m/s" % motion.speed)
+	assert_eq(m.roster_table.cell_text("blue", "distance"), "%.1f km" % motion.dist_km)
+	assert_eq(m.roster_table.cell_text("late", "speed"), "—", "late isn't on grid yet")
+	assert_eq(m.roster_table.cell_text("late", "distance"), "—")
+	m._seek(10.0)
+	m._process(0.0)
+	assert_eq(m.roster_table.cell_text("late", "speed"), "0 m/s")
+	assert_eq(m.roster_table.cell_text("late", "distance"), "0.0 km")
+	assert_almost(m.roster_buttons["runner"].modulate.a, 0.5, 1e-3, "out-of-bounds pilot dimmed")
+	assert_almost(m.roster_buttons["blue"].modulate.a, 1.0)
+
+
+func test_roster_panel_fits_columns() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	var before := -m.roster_panel.offset_left
+	m.roster_table.set_column_visible("speed", false)
+	assert_almost(-m.roster_panel.offset_left, before - RosterTable.COLUMNS.speed.width - RosterTable.HANDLE_W)
 
 
 func test_track_centres_camera() -> void:
