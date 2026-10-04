@@ -32,6 +32,10 @@ pub struct PanelSpec {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Scene {
     pub panels: Vec<PanelSpec>,
+    /// Where one observer's Local chat window sits in the frame, for matching the recording
+    /// against a chat log (`scrim-positions --chat-log`). Not OCR'd by this crate.
+    #[serde(default)]
+    pub chat: Option<Rect>,
 }
 
 impl Scene {
