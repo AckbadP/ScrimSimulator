@@ -25,9 +25,11 @@ dragged out of place by accident.
    the Scene Collection menu.
 2. For each Observer source, open **Properties** and pick that observer's `EVE - <name>` window.
    Window IDs change every session, so the template leaves them blank.
-3. Still in Properties, crop the capture (Crop Top/Left/Right/Bottom) down to the overview so its
-   text is drawn as large as possible in the slot. Crop off the title bar too.
-4. Point **Chat** at one of the observer windows too and crop it to that client's Local chat
+3. The captures are already cropped for the window layout in [`docs/eve`](../eve/README.md):
+   2486×1374 windowed, UI scale 1.75. If your observers use that layout, leave the crops as they
+   are. If not, change Crop Top/Left/Right/Bottom in Properties until only the overview is left, so
+   its text is drawn as large as possible in the slot. Crop off the title bar too.
+4. Point **Chat** at one of the observer windows as well. It's cropped to that client's Local chat
    window (messages only; the input box can go). `scrim-positions --chat-log` reads it to match
    the recording against the chat log and find the EVE time. Keep the chat at the client's
    default font size so Tesseract can read it.
