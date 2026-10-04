@@ -5,8 +5,8 @@ const C := MatchData.CENTRE_M
 const X := Vector3.RIGHT
 
 
-func _load(rows: Array, radii := {}) -> MatchData:
-	return MatchData.load_csv(write_csv(rows), radii)
+func _load(rows: Array, radii := {}, move_threshold_m := 0.0) -> MatchData:
+	return MatchData.load_csv(write_csv(rows), radii, move_threshold_m)
 
 
 # --- load_csv ----------------------------------------------------------------
@@ -49,12 +49,70 @@ func test_load_sorts_samples_and_sets_time_range() -> void:
 	assert_eq(d.duration, 2.0)
 
 
+func test_load_skips_countdown_before_first_move() -> void:
+	var d := _load([
+		row(0, "A", "Rifter", C),
+		row(5, "A", "Rifter", C),
+		row(6, "A", "Rifter", C + X * 1000),
+		row(8, "A", "Rifter", C + X * 3000),
+	])
+	assert_eq(d.start_time, 5.0, "match starts at the sample before the first move")
+	assert_eq(d.duration, 3.0)
+	assert_eq(d.sample("A", 0.0).pos, C)
+	assert_eq(d.sample("A", 1.0).pos, C + X * 1000)
+
+
+func test_load_ignores_jitter_under_threshold_when_finding_start() -> void:
+	var rows := [
+		row(0, "A", "Rifter", C),
+		row(1, "A", "Rifter", C + X * 450),
+		row(2, "A", "Rifter", C),
+		row(3, "A", "Rifter", C + X * 2000),
+	]
+	assert_eq(_load(rows, {}, 500.0).start_time, 2.0)
+	assert_eq(_load(rows).start_time, 0.0, "without a threshold any movement starts the match")
+
+
+func test_load_starts_at_earliest_mover() -> void:
+	var d := _load([
+		row(0, "late", "Rifter", C),
+		row(7, "late", "Rifter", C),
+		row(8, "late", "Rifter", C + X * 1000),
+		row(0, "early", "Merlin", C),
+		row(3, "early", "Merlin", C),
+		row(4, "early", "Merlin", C + X * 1000),
+		row(10, "early", "Merlin", C + X * 2000),
+	])
+	assert_eq(d.start_time, 3.0)
+	assert_eq(d.duration, 7.0)
+
+
 func test_load_reads_sample_fields() -> void:
 	var d := _load([row(1.5, "A Pilot", "Rifter", Vector3(1, 2, 3))])
 	var s: Dictionary = d.tracks["A Pilot"][0]
 	assert_eq(s.t, 1.5)
 	assert_eq(s.pos, Vector3(1, 2, 3))
 	assert_eq(s.ship_type, "Rifter")
+
+
+func test_load_reads_csv_speed() -> void:
+	var d := _load(["0,A,Rifter,1,2,3,412.5,0,0,0,0", "1,A,Rifter,1,2,3,,0,0,0,0"])
+	assert_eq(d.tracks["A"][0].speed, 412.5)
+	assert_true(is_nan(d.tracks["A"][1].speed), "blank speed is unknown")
+
+
+func test_load_without_speed_column_has_unknown_speed() -> void:
+	var path := write_csv(["0,A,Rifter,1,2,3"], "t,pilot,ship_type,x_m,y_m,z_m")
+	assert_true(is_nan(MatchData.load_csv(path).tracks["A"][0].speed))
+
+
+func test_sample_speed_steps_instead_of_interpolating() -> void:
+	var d := _load(["0,A,Rifter,0,0,0,100,0,0,0,0", "2,A,Rifter,500,0,0,300,0,0,0,0"])
+	assert_eq(d.sample("A", 0.0).speed, 100.0)
+	assert_eq(d.sample("A", 1.9).speed, 100.0)
+	assert_eq(d.sample("A", 2.0).speed, 300.0)
+	d.smooth = true
+	assert_eq(d.sample("A", 1.0).speed, 100.0)
 
 
 func test_load_tolerates_reordered_padded_header() -> void:
@@ -156,6 +214,7 @@ func test_pilot_inside_boundary_has_no_death() -> void:
 func test_boundary_crossing_is_interpolated() -> void:
 	var d := _load([
 		row(10, "early", "x", C),
+		row(11, "early", "x", C + X * 1000.0),
 		row(20, "a", "x", C + X * 100000.0),
 		row(30, "a", "x", C + X * 150000.0),
 	])
@@ -168,7 +227,7 @@ func test_boundary_crossing_is_interpolated() -> void:
 
 func test_first_sample_outside_dies_there() -> void:
 	var p := C + Vector3(0, 130000, 0)
-	var d := _load([row(4, "start", "x", C), row(6, "a", "x", p), row(8, "a", "x", C)])
+	var d := _load([row(4, "start", "x", C), row(5, "start", "x", C + X * 1000.0), row(6, "a", "x", p), row(8, "a", "x", C)])
 	assert_eq(d.deaths["a"].t, 2.0)
 	assert_eq(d.deaths["a"].pos, p)
 
@@ -199,6 +258,104 @@ func test_boundary_crossing_fraction() -> void:
 	assert_eq(MatchData._boundary_crossing(C + X * 200.0, C + X * 200.0, 100.0), 1.0)
 	# Both ends inside: the crossing lies beyond b, so it's clamped.
 	assert_eq(MatchData._boundary_crossing(C, C + X * 50.0, 100.0), 1.0)
+
+
+# --- events ------------------------------------------------------------------
+
+func _kinds(d: MatchData) -> Array:
+	return d.events.map(func(e): return e.kind)
+
+
+func test_capsule_change_is_a_death_event() -> void:
+	var d := _load([
+		row(10, "a", "Venture", C),
+		row(11, "a", "Venture", C + X),
+		row(12, "a", "Capsule", C + X * 2.0),
+		row(13, "a", "Capsule", C + X * 3.0),
+	])
+	assert_eq(_kinds(d), [MatchData.Event.DEATH])
+	assert_eq(d.events[0].t, 2.0)
+	assert_eq(d.events[0].pilot, "a")
+	assert_eq(d.events[0].ship_type, "Venture")
+	assert_eq(d.events[0].pos, C + X * 2.0)
+
+
+func test_starting_in_a_capsule_is_not_a_death() -> void:
+	var d := _load([row(0, "a", "Capsule", C), row(1, "a", "Capsule", C + X)])
+	assert_eq(d.events, [])
+
+
+func test_boundary_crossing_is_an_event() -> void:
+	var d := _load([
+		row(10, "early", "x", C),
+		row(20, "a", "x", C + X * 100000.0),
+		row(30, "a", "x", C + X * 150000.0),
+	])
+	assert_eq(_kinds(d), [MatchData.Event.BOUNDARY])
+	assert_eq(d.events[0].t, d.deaths["a"].t)
+	assert_eq(d.events[0].pos, d.deaths["a"].pos)
+	assert_eq(d.events[0].ship_type, "x")
+
+
+func test_100km_hop_is_an_mjd() -> void:
+	var d := _load([
+		row(0, "a", "Rifter", C),
+		row(1, "a", "Rifter", C + X * 1000),
+		row(2, "a", "Rifter", C + X * 101300),
+		row(3, "a", "Rifter", C + X * 101400),
+	])
+	assert_eq(_kinds(d), [MatchData.Event.MJD])
+	assert_eq(d.events[0].t, 2.0)
+	assert_eq(d.events[0].pos, C + X * 1000)
+	assert_eq(d.events[0].to_pos, C + X * 101300)
+	assert_true(d.tracks["a"][2].get("mjd", false))
+
+
+func test_non_mjd_hops_are_ignored() -> void:
+	var d := _load([
+		row(0, "short", "Rifter", C),
+		row(1, "short", "Rifter", C + X * 60000),
+		row(0, "slow", "Rifter", C),
+		row(30, "slow", "Rifter", C + X * 100000),  # across a gap
+		row(0, "pod", "Capsule", C),
+		row(1, "pod", "Capsule", C + X * 100000),  # capsules can't MJD
+	])
+	assert_eq(d.events, [])
+
+
+func test_events_are_sorted_by_time() -> void:
+	var d := _load([
+		row(0, "late", "Venture", C),
+		row(5, "late", "Capsule", C),
+		row(0, "early", "Venture", C),
+		row(1, "early", "Venture", C + Vector3.UP * 100000),
+	])
+	assert_eq(_kinds(d), [MatchData.Event.MJD, MatchData.Event.DEATH])
+
+
+func test_mjd_out_of_bounds_dies_on_landing() -> void:
+	var d := _load([
+		row(0, "a", "Rifter", C + X * 50000),
+		row(1, "a", "Rifter", C + X * 150000),
+	])
+	assert_eq(d.deaths["a"].t, 1.0)
+	assert_eq(d.deaths["a"].pos, C + X * 150000)
+
+
+func test_sample_holds_take_off_point_through_mjd() -> void:
+	var d := _load([
+		row(0, "a", "Rifter", C),
+		row(1, "a", "Rifter", C + X * 1000),
+		row(2, "a", "Rifter", C + X * 101000),
+		row(3, "a", "Rifter", C + X * 102000),
+	])
+	assert_eq(d.sample("a", 1.5).pos, C + X * 1000)
+	assert_eq(d.sample("a", 2.0).pos, C + X * 101000)
+	d.smooth = true
+	assert_eq(d.sample("a", 1.5).pos, C + X * 1000)
+	# The spline after the jump ignores points before it: straight, even track stays linear.
+	assert_almost(d.sample("a", 2.5).pos, C + X * 101500, 1.0)
+	assert_almost(d.sample("a", 0.5).pos, C + X * 500, 1.0)
 
 
 # --- sample ------------------------------------------------------------------
