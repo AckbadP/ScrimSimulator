@@ -1,6 +1,7 @@
 class_name DebugMenu
 extends OpaquePopup
-## Debug overlay controls: a movement vector and range spheres for one ship, or (`all_ships`)
+## Debug overlay controls: a movement vector and range spheres for one ship (plus renaming its
+## pilot), or (`all_ships`)
 ## the same for every ship at once, plus the vector projection time and the beacons' jump
 ## range. Emits what the user picked; `main.gd` owns the state and calls `show_state` to redraw.
 
@@ -10,12 +11,16 @@ signal sphere_removed(index: int)
 signal spheres_cleared
 signal vector_seconds_changed(seconds: float)
 signal beacon_range_toggled(centre: bool, on: bool)
+## "Rename pilot…" pressed (per-ship menu only).
+signal rename_requested
 
 const DEFAULT_RADIUS_KM := 10.0
 const DEFAULT_COLOR := Color(0.3, 1.0, 0.75)
 
 var all_ships: bool
 var title_label: Label
+## Per-ship menu only.
+var rename_button: Button
 var vector_check: CheckBox
 ## One row per sphere (per-ship menu only): swatch, range, remove button.
 var sphere_list: VBoxContainer
@@ -35,8 +40,18 @@ func _init(all := false) -> void:
 	box.add_theme_constant_override("separation", 6)
 	add_child(box)
 
+	var title_row := HBoxContainer.new()
+	box.add_child(title_row)
 	title_label = Label.new()
-	box.add_child(title_label)
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(title_label)
+	if not all:
+		rename_button = Button.new()
+		rename_button.text = "Rename pilot…"
+		rename_button.pressed.connect(func():
+			hide()
+			rename_requested.emit())
+		title_row.add_child(rename_button)
 
 	vector_check = CheckBox.new()
 	vector_check.text = "Movement vectors on all ships" if all else "Movement vector"

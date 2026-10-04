@@ -244,3 +244,20 @@ func test_load_repairs_saved_layout() -> void:
 	var hidden := RosterTable._load_columns(RosterTable.COLUMNS.keys().map(
 			func(id): return {"id": id, "visible": false}))
 	assert_true(hidden[0].visible, "never all hidden")
+
+
+func test_double_click_group() -> void:
+	var t := _table()
+	var plain := t.add_group("Unknown", Color.WHITE)
+	var keyed := t.add_group("Red", Color.RED, 1, "rename")
+	var got := []
+	t.group_activated.connect(func(k): got.append(k))
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	keyed.gui_input.emit(ev)
+	ev.double_click = true
+	keyed.gui_input.emit(ev)
+	plain.gui_input.emit(ev)
+	assert_eq(got, [1])
+	assert_eq(plain.mouse_filter, Control.MOUSE_FILTER_IGNORE)
