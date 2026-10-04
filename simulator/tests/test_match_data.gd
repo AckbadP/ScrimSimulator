@@ -62,6 +62,18 @@ func test_load_skips_countdown_before_first_move() -> void:
 	assert_eq(d.sample("A", 1.0).pos, C + X * 1000)
 
 
+func test_load_keep_lead_in_starts_at_first_sample() -> void:
+	var d := MatchData.load_csv(write_csv([
+		row(2, "A", "Rifter", C),
+		row(5, "A", "Rifter", C),
+		row(6, "A", "Rifter", C + X * 1000),
+		row(8, "A", "Rifter", C + X * 3000),
+	]), {}, 0.0, true)
+	assert_eq(d.start_time, 2.0, "countdown kept")
+	assert_eq(d.duration, 6.0)
+	assert_eq(d.sample("A", 4.0).pos, C + X * 1000)
+
+
 func test_load_ignores_jitter_under_threshold_when_finding_start() -> void:
 	var rows := [
 		row(0, "A", "Rifter", C),

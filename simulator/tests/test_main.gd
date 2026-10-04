@@ -165,6 +165,91 @@ func test_menu_remove_deletes_from_library() -> void:
 	assert_eq(MatchLibrary.list(), [])
 
 
+## A library match whose first ship moves at 2 s (after a countdown from 0 s).
+func _countdown_match() -> String:
+	return MatchLibrary.add(write_csv([
+		row(0, "a", "Rifter", C),
+		row(2, "a", "Rifter", C),
+		row(4, "a", "Rifter", C + X * 2000),
+		row(6, "a", "Rifter", C + X * 4000),
+	]))
+
+
+func test_audio_keeps_countdown() -> void:
+	var path := _countdown_match()
+	var m := _main()
+	m.load_match(path)
+	assert_eq(m.data.start_time, 2.0, "no audio: countdown skipped")
+	assert_null(m.audio_player.stream)
+	MatchLibrary.set_audio(path, write_wav(10.0))
+	m.load_match(path)
+	assert_eq(m.data.start_time, 0.0, "audio starts with the data")
+	assert_eq(m.data.duration, 6.0)
+	assert_true(m.audio_player.stream is AudioStreamWAV)
+
+
+func test_audio_follows_playback() -> void:
+	var path := _countdown_match()
+	MatchLibrary.set_audio(path, write_wav(10.0))
+	var m := _main()
+	m.load_match(path)
+	assert_false(m.audio_player.playing)
+	m._seek(3.0)
+	m._toggle_play()
+	assert_true(m.audio_player.playing)
+	m._set_speed(2.0)
+	assert_eq(m.audio_player.pitch_scale, 2.0)
+	assert_eq(m.audio_pitch.pitch_scale, 0.5, "pitch kept")
+	m._toggle_play()
+	assert_false(m.audio_player.playing)
+	m._set_speed(1.0)
+
+
+func test_menu_audio_badge_and_context_menu() -> void:
+	var path := _countdown_match()
+	var m := _main()
+	assert_eq(m.menu.list.get_item_icon(0), m.menu.blank_icon)
+	m.menu.add_audio(write_wav())
+	assert_eq(m.menu.list.get_item_icon(0), m.menu.audio_icon, "badge")
+	assert_ne(MatchLibrary.audio_path(path), "")
+	m.menu.open_context_menu(Vector2(10, 10))
+	var menu: PopupMenu = m.menu.context_menu
+	assert_eq(menu.get_item_text(menu.get_item_index(MainMenu.MenuItem.ADD_AUDIO)), "Replace audio…")
+	assert_false(menu.is_item_disabled(menu.get_item_index(MainMenu.MenuItem.REMOVE_AUDIO)))
+	menu.id_pressed.emit(MainMenu.MenuItem.REMOVE_AUDIO)
+	assert_eq(MatchLibrary.audio_path(path), "")
+	assert_eq(m.menu.list.get_item_icon(0), m.menu.blank_icon)
+	assert_eq(m.menu.list.item_count, 1, "match stays")
+	m.menu.open_context_menu(Vector2(10, 10))
+	assert_true(menu.is_item_disabled(menu.get_item_index(MainMenu.MenuItem.REMOVE_AUDIO)))
+	menu.id_pressed.emit(MainMenu.MenuItem.REMOVE)
+	assert_true(m.menu.remove_dialog.visible)
+	m.menu.remove_dialog.confirmed.emit()
+	assert_eq(MatchLibrary.list(), [])
+
+
+func test_audio_change_reloads_open_match() -> void:
+	var path := _countdown_match()
+	var m := _main()
+	m.load_match(path)
+	m._show_menu()
+	m.menu.add_audio(write_wav())
+	assert_eq(m.data.start_time, 0.0)
+	assert_true(m.menu.visible, "stays on the menu")
+	m.menu.remove_audio_selected()
+	assert_eq(m.data.start_time, 2.0)
+	assert_null(m.audio_player.stream)
+
+
+func test_drop_audio_onto_open_match() -> void:
+	var path := _countdown_match()
+	var m := _main()
+	m.load_match(path)
+	m._on_files_dropped(PackedStringArray([write_wav()]))
+	assert_ne(MatchLibrary.audio_path(path), "")
+	assert_eq(m.data.start_time, 0.0)
+
+
 func test_load_bad_file() -> void:
 	var m := _main()
 	m.load_match(temp_dir().path_join("missing.positions.csv"))
