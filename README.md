@@ -19,6 +19,11 @@ full design: the multilateration math, OBS/capture requirements, the glyph-match
 (inspired by [darkmatter2222/EVE-Online-Bot](https://github.com/darkmatter2222/EVE-Online-Bot)),
 the on-disk recording format, and the validation plan.
 
+## Recording a match
+
+[`docs/obs/`](docs/obs/README.md) has an OBS scene collection for recording three observer
+clients (Linux, Xcomposite window capture), plus the matching `scene.json` for `scrim-positions`.
+
 ## Simulator (`simulator/`)
 
 A standalone Godot 4.6 replay viewer for the `*.positions.csv` files written by `scrim-positions`.
