@@ -1,7 +1,7 @@
 class_name MainMenu
 extends PanelContainer
 ## Full-screen start menu: pick a match from the `MatchLibrary`, add a new CSV to it, rename or
-## remove one, attach audio to one (right-click for all of these). Covers the viewer until a
+## remove one, attach audio or combat logs (EVE gamelogs) to one (right-click for all of these). Covers the viewer until a
 ## match is chosen.
 
 ## The library path of the match to open.
@@ -12,8 +12,10 @@ signal resumed
 signal match_renamed(old_path: String, new_path: String)
 ## Library match `path` got, lost or replaced its audio file.
 signal audio_changed(path: String)
+## Library match `path` got or lost combat logs.
+signal logs_changed(path: String)
 
-enum MenuItem { ADD_AUDIO, REMOVE_AUDIO, RENAME, REMOVE }
+enum MenuItem { ADD_AUDIO, REMOVE_AUDIO, ADD_LOGS, REMOVE_LOGS, RENAME, REMOVE }
 
 ## Badge on matches with audio: a speaker.
 const AUDIO_ICON_SVG := """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
@@ -33,6 +35,7 @@ var add_dialog: FileDialog
 var remove_dialog: ConfirmationDialog
 var rename_dialog: RenameDialog
 var audio_dialog: FileDialog
+var logs_dialog: FileDialog
 ## Right-click menu of a match (`MenuItem` ids).
 var context_menu: PopupMenu
 var audio_icon: Texture2D
@@ -151,6 +154,14 @@ func _init() -> void:
 	audio_dialog.file_selected.connect(add_audio)
 	add_child(audio_dialog)
 
+	logs_dialog = FileDialog.new()
+	logs_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
+	logs_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	logs_dialog.filters = PackedStringArray(["*.txt ; EVE gamelogs"])
+	logs_dialog.use_native_dialog = true
+	logs_dialog.files_selected.connect(add_logs)
+	add_child(logs_dialog)
+
 	context_menu = PopupMenu.new()
 	context_menu.id_pressed.connect(_on_context_item)
 	add_child(context_menu)
@@ -171,8 +182,14 @@ func refresh() -> void:
 	list.clear()
 	for e in entries:
 		list.add_item("%s — %s" % [e.name, _fmt_date(e.modified)], audio_icon if e.audio else blank_icon)
+		var notes := []
 		if e.audio:
-			list.set_item_tooltip(list.item_count - 1, "Has audio")
+			notes.append("Has audio")
+		var logs := MatchLibrary.log_paths(e.path).size()
+		if logs > 0:
+			notes.append("%d combat log%s" % [logs, "" if logs == 1 else "s"])
+		if not notes.is_empty():
+			list.set_item_tooltip(list.item_count - 1, "\n".join(notes))
 		if e.path == was:
 			list.select(list.item_count - 1)
 	if not list.is_anything_selected() and list.item_count > 0:
@@ -212,6 +229,37 @@ func add_audio(src: String) -> void:
 	show_error("")
 	refresh()
 	audio_changed.emit(path)
+
+
+## Saves the parts of EVE gamelogs `srcs` logged during the selected match as its combat logs
+## (`MatchLibrary.add_log`). Each must be a gamelog with combat during the match, which needs a
+## CSV with EVE times; the others are skipped and named in the error line.
+func add_logs(srcs: PackedStringArray) -> void:
+	var path := selected_path()
+	if path == "":
+		return
+	var data := MatchData.load_csv(path, {}, 0.0, true)
+	if data == null or not data.has_eve_time():
+		show_error("Can't add combat logs: this match has no EVE times (make its CSV with --chat-log or --t0)")
+		return
+	var failed := []
+	for src in srcs:
+		if MatchLibrary.add_log(path, src, data) == "":
+			failed.append(src.get_file())
+	show_error("" if failed.is_empty() else "Not added (not a gamelog, or no combat during this match): %s" % ", ".join(failed))
+	refresh()
+	if failed.size() < srcs.size():
+		logs_changed.emit(path)
+
+
+## Deletes the selected match's combat logs.
+func remove_logs_selected() -> void:
+	var path := selected_path()
+	if path == "" or MatchLibrary.log_paths(path).is_empty():
+		return
+	MatchLibrary.remove_logs(path)
+	refresh()
+	logs_changed.emit(path)
 
 
 ## Deletes the selected match's audio file.
@@ -263,6 +311,10 @@ func open_context_menu(at: Vector2) -> void:
 	context_menu.add_item("Replace audio…" if has_audio else "Add audio…", MenuItem.ADD_AUDIO)
 	context_menu.add_item("Remove audio", MenuItem.REMOVE_AUDIO)
 	context_menu.set_item_disabled(context_menu.get_item_index(MenuItem.REMOVE_AUDIO), not has_audio)
+	context_menu.add_item("Add combat logs…", MenuItem.ADD_LOGS)
+	context_menu.add_item("Remove combat logs", MenuItem.REMOVE_LOGS)
+	context_menu.set_item_disabled(context_menu.get_item_index(MenuItem.REMOVE_LOGS),
+		MatchLibrary.log_paths(path).is_empty())
 	context_menu.add_separator()
 	context_menu.add_item("Rename…", MenuItem.RENAME)
 	context_menu.add_item("Remove match…", MenuItem.REMOVE)
@@ -276,6 +328,11 @@ func _on_context_item(id: int) -> void:
 			_ask_audio()
 		MenuItem.REMOVE_AUDIO:
 			remove_audio_selected()
+		MenuItem.ADD_LOGS:
+			if selected_path() != "":
+				logs_dialog.popup_centered_ratio(0.6)
+		MenuItem.REMOVE_LOGS:
+			remove_logs_selected()
 		MenuItem.RENAME:
 			_ask_rename()
 		MenuItem.REMOVE:
@@ -286,7 +343,7 @@ func _confirm_remove() -> void:
 	var sel := list.get_selected_items()
 	if sel.is_empty():
 		return
-	remove_dialog.dialog_text = "Remove %s from the match list?\nThe copied CSV (and its audio) is deleted; the original files are not touched." % entries[sel[0]].name
+	remove_dialog.dialog_text = "Remove %s from the match list?\nThe copied CSV (and its audio and combat logs) is deleted; the original files are not touched." % entries[sel[0]].name
 	remove_dialog.popup_centered()
 
 

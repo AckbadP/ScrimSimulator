@@ -67,6 +67,26 @@ func test_load_without_eve_times() -> void:
 	assert_eq(d.eve_start, "")
 	assert_eq(d.eve_end, "")
 	assert_false(d.tracks["A"][0].has("eve_time"))
+	assert_false(d.has_eve_time())
+	assert_true(is_nan(d.eve_unix_at(0.0)))
+
+
+func test_eve_time_of_match_time() -> void:
+	var header := DEFAULT_HEADER + ",eve_time"
+	var rows := []
+	for t in [10, 12, 14, 16]:
+		rows.append(row(t, "A", "Rifter", C + X * (0.0 if t < 14 else 1000.0)) + ["2026-04-05T00:00:%02d.000Z" % t])
+	var path := write_csv(rows, header)
+	var start := CombatLog.parse_eve_time("2026-04-05T00:00:10.000Z")
+	var d := MatchData.load_csv(path)
+	assert_true(d.has_eve_time())
+	assert_eq(d.eve_unix_start, start)
+	assert_eq(d.start_time, 12.0, "countdown skipped")
+	assert_eq(d.eve_unix_at(0.0), start + 2.0)
+	assert_eq(d.match_time_of(start + 5.0), 3.0)
+	d = MatchData.load_csv(path, {}, 0.0, true)
+	assert_eq(d.eve_unix_at(0.0), start, "lead-in kept")
+	assert_eq(d.match_time_of(start + 5.0), 5.0)
 
 
 func test_load_skips_countdown_before_first_move() -> void:

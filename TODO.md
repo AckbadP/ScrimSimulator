@@ -26,3 +26,5 @@
 - shift + arrow keys to seek forward or back 10s
 - option to hide dead ships (or just movement of dead pilots)
 - upload folders per scrim with data paired via names for match and audio, folders for library of scrims
+- user should be able to upload a combat log and select a match or folder it is associated with. The data gets parsed and saved to the library, discarding any data that dosen't fall within a match
+- simulator should be a seperate download from the ocr portion and come with the demo match in it's library

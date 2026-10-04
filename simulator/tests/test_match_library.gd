@@ -123,6 +123,82 @@ func test_meta_round_trip() -> void:
 	assert_eq(MatchLibrary.list().size(), 1, "sidecar isn't listed")
 
 
+func test_meta_log_pilots_round_trip() -> void:
+	var path := MatchLibrary.add(_file("m.csv", "1"))
+	MatchLibrary.save_meta(path, {"teams": {}, "log_pilots": {"a.txt": "Some Pilot"}})
+	assert_eq(MatchLibrary.load_meta(path).log_pilots, {"a.txt": "Some Pilot"})
+
+
+## A positions CSV named `name` with EVE times 14:03:14 (t=0) to 14:03:24 (t=10).
+func _match_file(name := "m.positions.csv") -> String:
+	var body := "t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m,eve_time\n"
+	for t in range(0, 12, 2):
+		body += "%d,A,Rifter,%d,0,0,0,0,0,0,0,2026-10-03T14:03:%02d.000Z\n" % [t, 1000 * t, 14 + t]
+	return _file(name, body)
+
+
+## A gamelog named `name` of "A", with a hit logged at 14:03:`second` and a notice before the match.
+func _gamelog(name: String, second := 20, damage := 10) -> String:
+	return _file(name, "------\r\n  Gamelog\r\n  Listener: A\r\n------\r\n"
+		+ "[ 2026.10.03 13:00:00 ] (notify) Undocking\r\n"
+		+ "[ 2026.10.03 14:03:%02d ] (combat) %d to B[X](Rifter) - Gun - Hits\r\n" % [second, damage])
+
+
+func test_logs() -> void:
+	var path := MatchLibrary.add(_match_file())
+	assert_eq(MatchLibrary.logs_dir(path), MatchLibrary.dir.path_join("m.positions.logs"))
+	assert_eq(MatchLibrary.log_paths(path), [])
+	var a := MatchLibrary.add_log(path, _gamelog("20261003_1.txt"))
+	assert_eq(a, MatchLibrary.logs_dir(path).path_join("20261003_1.txt"))
+	assert_eq(MatchLibrary.add_log(path, _gamelog("20261003_1.txt")), a, "same log reused")
+	var a2 := MatchLibrary.add_log(path, _gamelog("20261003_1.txt", 20, 11))
+	assert_eq(a2.get_file(), "20261003_1 (2).txt", "different log, same name")
+	assert_eq(MatchLibrary.log_paths(path).size(), 2)
+	assert_true(MatchLibrary.log_paths(path).has(a2))
+	assert_eq(MatchLibrary.list().size(), 1, "logs aren't matches")
+	MatchLibrary.remove_log(path, a)
+	assert_eq(MatchLibrary.log_paths(path), [a2])
+	MatchLibrary.remove_logs(path)
+	assert_eq(MatchLibrary.log_paths(path), [])
+	assert_false(DirAccess.dir_exists_absolute(MatchLibrary.logs_dir(path)))
+
+
+func test_add_log_keeps_only_the_match() -> void:
+	var path := MatchLibrary.add(_match_file())
+	var saved := MatchLibrary.add_log(path, _gamelog("x.txt"))
+	assert_eq(FileAccess.get_file_as_string(saved), "------\r\n  Gamelog\r\n  Listener: A\r\n------\r\n"
+		+ "[ 2026.10.03 14:03:20 ] (combat) 10 to B[X](Rifter) - Gun - Hits\r\n")
+
+
+func test_add_log_refuses_logs_outside_the_match() -> void:
+	var path := MatchLibrary.add(_match_file())
+	assert_eq(MatchLibrary.add_log(path, _gamelog("late.txt", 59)), "", "no combat during the match")
+	assert_eq(MatchLibrary.add_log(path, _file("notes.txt", "hello\n")), "", "not a gamelog")
+	var no_times := MatchLibrary.add(_file("n.positions.csv", "t,pilot,ship_type,x_m,y_m,z_m\n0,A,Rifter,0,0,0\n"))
+	assert_eq(MatchLibrary.add_log(no_times, _gamelog("x.txt")), "", "no EVE times")
+	assert_eq(MatchLibrary.log_paths(path), [])
+
+
+func test_add_brings_logs_along() -> void:
+	var src := _match_file()
+	var logs := src.get_basename() + ".logs"
+	DirAccess.make_dir_recursive_absolute(logs)
+	DirAccess.copy_absolute(_gamelog("x.txt"), logs.path_join("x.txt"))
+	var path := MatchLibrary.add(src)
+	assert_eq(MatchLibrary.log_paths(path).map(func(p): return p.get_file()), ["x.txt"])
+	assert_false(FileAccess.get_file_as_string(MatchLibrary.log_paths(path)[0]).contains("Undocking"), "trimmed")
+
+
+func test_rename_and_remove_carry_logs() -> void:
+	var path := MatchLibrary.add(_match_file())
+	MatchLibrary.add_log(path, _gamelog("x.txt"))
+	var renamed := MatchLibrary.rename(path, "n")
+	assert_false(DirAccess.dir_exists_absolute(MatchLibrary.logs_dir(path)))
+	assert_eq(MatchLibrary.log_paths(renamed).map(func(p): return p.get_file()), ["x.txt"])
+	MatchLibrary.remove(renamed)
+	assert_false(DirAccess.dir_exists_absolute(MatchLibrary.logs_dir(renamed)))
+
+
 func test_remove_deletes_meta() -> void:
 	var path := MatchLibrary.add(_file("m.csv", "1"))
 	MatchLibrary.save_meta(path, {"teams": {}})

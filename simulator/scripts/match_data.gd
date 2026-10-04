@@ -54,6 +54,13 @@ var duration := 0.0
 ## EVE logs; "" when the CSV has no `eve_time` column.
 var eve_start := ""
 var eve_end := ""
+## `eve_start` / `eve_end` as unix seconds (NAN without `eve_time`).
+var eve_unix_start := NAN
+var eve_unix_end := NAN
+## CSV time of the first sample (whose EVE time is `eve_start`).
+var first_t := 0.0
+## `CombatLog`s of this match, synced to it; filled in by whoever loads the match.
+var combat_logs: Array = []
 ## Follow a Catmull-Rom spline through the samples instead of straight lines between them.
 var smooth := false
 
@@ -116,12 +123,37 @@ static func load_csv(path: String, ship_radii := {}, move_threshold_m := 0.0, ke
 		data.tracks[pilot].sort_custom(func(a, b): return a.t < b.t)
 	var first_move := INF if keep_lead_in else data._find_start(move_threshold_m)
 	data.start_time = first_move if first_move < INF else t_min
+	data.first_t = t_min
+	if not data.eve_start.is_empty():
+		data.eve_unix_start = CombatLog.parse_eve_time(data.eve_start)
+		data.eve_unix_end = CombatLog.parse_eve_time(data.eve_end)
 	data.duration = t_max - data.start_time
 	data._assign_teams()
 	data._find_mjds()
 	data._find_deaths()
 	data._find_events()
 	return data
+
+
+## Whether samples carry EVE times, so other EVE logs can be lined up with the match.
+func has_eve_time() -> bool:
+	return not is_nan(eve_unix_start)
+
+
+## EVE time (unix s) at match time `t`; NAN without EVE times.
+func eve_unix_at(t: float) -> float:
+	return eve_unix_start + (start_time - first_t) + t
+
+
+## EVE times (unix s) other logs are kept for: the CSV's span, `MAX_GAP_S` either side (their
+## times are whole seconds): `[first, last]` (`Vector2` is too coarse for unix times).
+func eve_window() -> PackedFloat64Array:
+	return PackedFloat64Array([eve_unix_start - MAX_GAP_S, eve_unix_end + MAX_GAP_S])
+
+
+## Match time at EVE time `eve_unix` (unix s); NAN without EVE times.
+func match_time_of(eve_unix: float) -> float:
+	return eve_unix - eve_unix_start - (start_time - first_t)
 
 
 ## Overview speed cell -> m/s, or NAN when blank.
