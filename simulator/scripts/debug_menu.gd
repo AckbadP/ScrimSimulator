@@ -13,6 +13,8 @@ signal vector_seconds_changed(seconds: float)
 signal beacon_range_toggled(centre: bool, on: bool)
 ## "Rename pilot…" pressed (per-ship menu only).
 signal rename_requested
+## "Get Damage Breakdown" pressed (per-ship menu only).
+signal damage_breakdown_requested
 
 const DEFAULT_RADIUS_KM := 10.0
 const DEFAULT_COLOR := Color(0.3, 1.0, 0.75)
@@ -21,6 +23,8 @@ var all_ships: bool
 var title_label: Label
 ## Per-ship menu only.
 var rename_button: Button
+## Per-ship menu only.
+var damage_button: Button
 var vector_check: CheckBox
 ## One row per sphere (per-ship menu only): swatch, range, remove button.
 var sphere_list: VBoxContainer
@@ -52,6 +56,12 @@ func _init(all := false) -> void:
 			hide()
 			rename_requested.emit())
 		title_row.add_child(rename_button)
+		damage_button = Button.new()
+		damage_button.text = "Get Damage Breakdown"
+		damage_button.pressed.connect(func():
+			hide()
+			damage_breakdown_requested.emit())
+		box.add_child(damage_button)
 
 	vector_check = CheckBox.new()
 	vector_check.text = "Movement vectors on all ships" if all else "Movement vector"
@@ -115,9 +125,12 @@ func _init(all := false) -> void:
 
 
 ## Fills the menu: `title`, the vector checkbox, and (per-ship menu) a row per sphere in
-## `spheres` ({ radius_km, color }).
-func show_state(title: String, vector_on: bool, spheres: Array) -> void:
+## `spheres` ({ radius_km, color }) and whether the damage breakdown has data (`has_damage`).
+func show_state(title: String, vector_on: bool, spheres: Array, has_damage := false) -> void:
 	title_label.text = title
+	if damage_button:
+		damage_button.disabled = not has_damage
+		damage_button.tooltip_text = "" if has_damage else "Add combat logs to the match first"
 	vector_check.set_pressed_no_signal(vector_on)
 	for c in sphere_list.get_children():
 		sphere_list.remove_child(c)

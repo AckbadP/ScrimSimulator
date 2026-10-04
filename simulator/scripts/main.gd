@@ -176,6 +176,8 @@ var select_texture: Texture2D
 var ship_debug_menu: DebugMenu
 var all_debug_menu: DebugMenu
 var debug_pilot := ""
+## Open "Get Damage Breakdown" windows, refreshed every frame.
+var breakdown_windows: Array[DamageBreakdown] = []
 ## Pilot and team renaming; `_rename_target` applies the submitted name.
 var rename_dialog: RenameDialog
 var _rename_target := func(_text: String): pass
@@ -270,6 +272,9 @@ func load_match(path: String) -> bool:
 		team_names = meta.get("team_names", {})
 		log_pilots = meta.get("log_pilots", {})
 		debug.clear()
+		for w in breakdown_windows.duplicate():
+			w.queue_free()
+		breakdown_windows.clear()
 		start_button.visible = true
 	for pilot in team_overrides:
 		if data.teams.has(pilot):
@@ -367,6 +372,7 @@ func _apply_combat_stats() -> void:
 	for id in CombatStats.RATE_IDS + CombatStats.EWAR_IDS:
 		roster_table.set_column_available(id, combat_stats.has(id))
 	_update_roster_cells()
+	_update_damage_breakdowns()
 
 
 ## Saves this match's team swaps and names (and gamelog attributions), if it is in the library.
@@ -525,6 +531,7 @@ func _process(delta: float) -> void:
 		timeline.set_value_no_signal(time)
 	_update_info()
 	_update_roster_cells()
+	_update_damage_breakdowns()
 	time_label.text = "%s / %s" % [_fmt_time(time), _fmt_time(data.duration)]
 
 
@@ -1237,7 +1244,7 @@ func _open_ship_debug_menu(pilot: String, at: Vector2) -> void:
 
 func _refresh_ship_debug_menu() -> void:
 	var state := _debug(debug_pilot)
-	ship_debug_menu.show_state(_pilot_name(debug_pilot), state.vector, state.spheres)
+	ship_debug_menu.show_state(_pilot_name(debug_pilot), state.vector, state.spheres, combat_stats.has("dmg_in"))
 
 
 func _open_all_debug_menu() -> void:
@@ -1262,6 +1269,8 @@ func _build_debug_menus(layer: CanvasLayer) -> void:
 	ship_debug_menu.sphere_added.connect(func(r, c): for_ship.call(func(): _add_sphere(debug_pilot, r, c)))
 	ship_debug_menu.sphere_removed.connect(func(i): for_ship.call(func(): _remove_sphere(debug_pilot, i)))
 	ship_debug_menu.rename_requested.connect(func(): _ask_rename_pilot(debug_pilot))
+	ship_debug_menu.damage_breakdown_requested.connect(func():
+		_open_damage_breakdown(layer, debug_pilot, ship_debug_menu.position))
 
 	all_debug_menu = DebugMenu.new(true)
 	all_debug_menu.seconds_spin.set_value_no_signal(vector_seconds)
@@ -1275,6 +1284,38 @@ func _build_debug_menus(layer: CanvasLayer) -> void:
 	all_debug_menu.spheres_cleared.connect(_clear_spheres)
 	all_debug_menu.vector_seconds_changed.connect(func(sec): vector_seconds = sec)
 	all_debug_menu.beacon_range_toggled.connect(_set_beacon_range)
+
+
+## Opens a new damage breakdown window for `pilot` with its top-left corner near `at` (kept on
+## screen) under `layer`.
+func _open_damage_breakdown(layer: CanvasLayer, pilot: String, at: Vector2) -> void:
+	var w := DamageBreakdown.new(pilot)
+	var view := Vector2i(get_viewport().get_visible_rect().size)
+	var pos := Vector2i(at) + Vector2i(24, 24) * (breakdown_windows.size() % 8)
+	w.position = pos.clamp(Vector2i(0, 32), (view - w.size).max(Vector2i(0, 32)))
+	layer.add_child(w)
+	breakdown_windows.append(w)
+	w.tree_exiting.connect(func(): breakdown_windows.erase(w))
+	_update_damage_breakdowns()
+	w.show()
+
+
+## Refreshes every open damage breakdown window: incoming DPS on its pilot now, per attacker.
+## Hidden while the main menu covers the viewer.
+func _update_damage_breakdowns() -> void:
+	for w in breakdown_windows:
+		w.visible = not menu.visible
+		if data == null or not w.visible:
+			continue
+		var rows := []
+		var total := 0.0
+		for r in combat_stats.damage_in_by_source(w.pilot, time):
+			var motion := _motion(r.pilot) if data.tracks.has(r.pilot) else {}
+			var ship: String = motion.get("ship_type", data.tracks[r.pilot][0].ship_type if data.tracks.has(r.pilot) else "")
+			var team: int = data.teams.get(r.pilot, MatchData.Team.UNKNOWN)
+			rows.append({"name": _pilot_name(r.pilot), "ship": ship, "color": TEAM_COLORS[team], "dps": r.dps})
+			total += r.dps
+		w.show_rows("Incoming DPS — %s" % _pilot_name(w.pilot), total, rows)
 
 
 # --- playback ----------------------------------------------------------------
