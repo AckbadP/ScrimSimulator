@@ -51,6 +51,9 @@ const SELECT_COLOR := Color(1, 1, 1, 0.9)
 ## Ship/death label `pixel_size` per screen pixel spanned at 1 unit from the camera (0.0008 at the
 ## default 75° FOV and 648 px viewport), so labels keep their on-screen size.
 const LABEL_PX := 0.338
+## What can be shown above a ship (settings `overlay/<field>`), in label order; `icon` is the
+## overview bracket.
+const OVERLAY_FIELDS := ["name", "type", "distance", "speed", "icon"]
 ## Interface scale presets offered in Settings.
 const UI_SCALES := [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 const MJD_COLOR := Color(0.3, 0.9, 0.9)
@@ -119,6 +122,8 @@ var assets: ShipAssets
 var models_on := true
 ## Smooth ship paths between samples (setting `display/smooth_motion`).
 var smooth_on := true
+## field -> shown, for each of `OVERLAY_FIELDS` (settings `overlay/<field>`).
+var ship_overlay := {}
 ## Corner/centre markers: plain boxes, or MJU models + icons.
 var markers_box: Node3D
 var markers_model: Node3D
@@ -149,6 +154,7 @@ var ui_scale_option: OptionButton
 var file_label: Label
 var sde_label: Label
 var settings_popup: OpaquePopup
+var overlay_popup: OpaquePopup
 var download_dialog: ConfirmationDialog
 var assets_dialog: ConfirmationDialog
 var bottom_panel: PanelContainer
@@ -185,6 +191,8 @@ func _ready() -> void:
 	add_child(assets)
 	models_on = Settings.get_value("display/ship_models")
 	smooth_on = Settings.get_value("display/smooth_motion")
+	for field in OVERLAY_FIELDS:
+		ship_overlay[field] = Settings.get_value("overlay/" + field)
 	get_window().content_scale_factor = Settings.get_value("display/ui_scale")
 	_build_environment()
 	_overlay_unit = _units_per_px(1.0)
@@ -414,6 +422,14 @@ func _set_match_setting(key: String, value: Variant) -> void:
 	Settings.set_value(key, value)
 	if data != null:
 		load_match(match_path)
+
+
+## Shows or hides `field` (one of `OVERLAY_FIELDS`) above every ship, and saves it.
+func _set_overlay(field: String, on: bool) -> void:
+	ship_overlay[field] = on
+	Settings.set_value("overlay/" + field, on)
+	for pilot in ships:
+		ships[pilot].ship_type = ""  # Forces `_update_ships` to redo the icon.
 
 
 ## Switches ships and markers between models + icons and spheres + boxes.
@@ -709,7 +725,6 @@ func _update_ships() -> void:
 			ship.ship_type = s.ship_type
 			ship.radius = data.radius_m(s.ship_type) * M_TO_UNITS
 			ship.dead = dead
-			ship.label.text = "%s\n%s%s" % [_pilot_name(pilot), s.ship_type, "\nDEAD (out of bounds)" if dead else ""]
 			var pod: bool = s.ship_type == "Capsule"
 			var color: Color = ship.color.darkened(0.5) if pod else ship.color
 			if dead:
@@ -718,12 +733,31 @@ func _update_ships() -> void:
 			ship.tint = color
 			_refresh_visual(ship)
 			ship.label.modulate = color if not dead else Color(color, 0.7)
+		ship.label.text = _ship_label_text(pilot, s, dead)
+		ship.label.visible = ship.label.text != ""
 		_face_heading(ship, pilot)
 		var r: float = ship.radius
 		if ship.model_id == 0 or r <= 0.0:
 			r = maxf(r, camera.global_position.distance_to(node.position) * MIN_VISIBLE_ANGLE)
 		ship.visual.scale = Vector3.ONE * r
 		ship.label.position.y = r * 1.6 if not ship.icon.visible else maxf(r * 1.6, _icon_clearance(node))
+
+
+## The text above `pilot`'s ship for its sample `s`: the `ship_overlay` fields that are on, one
+## per line, then DEAD when it has left the arena.
+func _ship_label_text(pilot: String, s: Dictionary, dead: bool) -> String:
+	var lines := PackedStringArray()
+	if ship_overlay.name:
+		lines.append(_pilot_name(pilot))
+	if ship_overlay.type:
+		lines.append(s.ship_type)
+	if ship_overlay.distance:
+		lines.append("%.1f km" % (s.pos.distance_to(MatchData.CENTRE_M) * M_TO_UNITS))
+	if ship_overlay.speed and not is_nan(s.speed):
+		lines.append(_fmt_speed(s.speed))
+	if dead:
+		lines.append("DEAD (out of bounds)")
+	return "\n".join(lines)
 
 
 ## Swaps `ship.visual` to the hull model (models on and cached) or the sphere, and tints it.
@@ -748,7 +782,7 @@ func _refresh_visual(ship: Dictionary) -> void:
 		for m in ship.visual.find_children("*", "GeometryInstance3D", true, false):
 			m.transparency = 0.6 if ship.dead else 0.0
 	var tex: Texture2D = null
-	if models_on and info:
+	if models_on and ship_overlay.icon and info:
 		tex = assets.bracket(info.group_id, sizes.ship_groups.get(info.group_id, ""))
 	_set_icon(ship.icon, tex, Color(color, maxf(color.a, 0.7)))
 
@@ -1397,6 +1431,7 @@ func _build_ui() -> void:
 	info_panel.add_child(info_label)
 
 	_build_settings(layer)
+	_build_overlay_menu(layer)
 	_build_roster(layer)
 	_build_debug_menus(layer)
 
@@ -1459,6 +1494,13 @@ func _build_settings(layer: CanvasLayer) -> void:
 	boundary_setting.button_pressed = boundary.visible
 	boundary_setting.toggled.connect(func(on): boundary.visible = on)
 	box.add_child(boundary_setting)
+
+	var overlay_button := Button.new()
+	overlay_button.text = "Ship overlay…"
+	overlay_button.tooltip_text = "Choose what is shown above each ship: name, type, distance, speed, icon."
+	overlay_button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	overlay_button.pressed.connect(func(): overlay_popup.popup_centered())
+	box.add_child(overlay_button)
 
 	var smooth_setting := CheckBox.new()
 	smooth_setting.text = "Smooth ship movement between position samples (instead of straight lines)"
@@ -1527,6 +1569,33 @@ func _build_settings(layer: CanvasLayer) -> void:
 	models_download.text = "Download ship icons"
 	models_download.pressed.connect(assets.full_download)
 	buttons.add_child(models_download)
+
+
+## Settings → Ship overlay: a checkbox per `OVERLAY_FIELDS` entry.
+func _build_overlay_menu(layer: CanvasLayer) -> void:
+	overlay_popup = OpaquePopup.new()
+	layer.add_child(overlay_popup)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	overlay_popup.add_child(box)
+
+	var title := Label.new()
+	title.text = "Shown above ships"
+	box.add_child(title)
+
+	var names := {
+		"name": "Pilot name",
+		"type": "Ship type",
+		"distance": "Distance from centre",
+		"speed": "Speed",
+		"icon": "Ship icon (with hull models)",
+	}
+	for field in OVERLAY_FIELDS:
+		var check := CheckBox.new()
+		check.text = names[field]
+		check.button_pressed = ship_overlay[field]
+		check.toggled.connect(func(on): _set_overlay(field, on))
+		box.add_child(check)
 
 
 ## Right-hand table of each team's pilots (ship, pilot, speed, distance from centre): click one to
