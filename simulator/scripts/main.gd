@@ -237,6 +237,7 @@ func _ready() -> void:
 	assets.start(models_on, Settings.get_value("sde/auto_update"))
 	_apply_visual_mode()
 
+	MatchLibrary.add_demo()
 	var args := OS.get_cmdline_user_args()
 	var i := args.find("--csv")
 	if i >= 0 and i + 1 < args.size():

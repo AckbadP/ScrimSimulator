@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Build release bundles of the Godot simulator (plus its glb-undraco model helper) and the
-# scrim-positions OCR tool.
+# Build release bundles: the Godot simulator (plus its glb-undraco model helper and the demo
+# match) and, as a separate download, the scrim-positions OCR tool.
 #
 #   scripts/build.sh [linux|windows|all]    (default: all)
 #
 # Output: dist/scrim-simulator-<version>-<platform>-x86_64.zip
+#         dist/scrim-positions-<version>-<platform>-x86_64.zip
 # Runs on Ubuntu; Windows is cross-compiled (needs `mingw-w64`). Godot and its export templates
 # are downloaded into .cache/ / the user's Godot data dir if not already present. Override the
 # Godot binary with $GODOT.
@@ -68,40 +69,79 @@ export_simulator() { # <preset> <path relative to simulator/>
     "$GODOT" --headless --path simulator --export-release "$1" "$2"
 }
 
-write_readme() { # <dir> <sim exe> <ocr exe> <undraco exe>
+write_simulator_readme() { # <dir> <sim exe> <undraco exe>
     cat > "$1/README.txt" <<EOF
 Scrim Simulator ${VERSION}
 
 $2
-    Replay viewer for *.positions.csv files. Open a CSV with the "Open CSV..." button, by
-    dropping it onto the window, or from the command line:
+    Replay viewer for *.positions.csv files. The demo match in demo/ is added to the match
+    list on first run. Add your own with the "Add match..." button, by dropping a CSV onto
+    the window, or open one from the command line:
         $2 -- --csv /path/to/match.positions.csv
     Ship sizes are downloaded from the EVE static data export into sde/ next to the
     executable on first run. Ships are drawn as their hull models with overview icons
     (toggle with M or in Settings); the icons and models are downloaded into sde/assets/,
     each hull the first time a match needs it.
 
-$4
+$3
     Helper the simulator runs to decompress downloaded ship models. Keep it next to $2.
 
-$3
-    OCRs a three-observer scrim recording into <video>.positions.csv:
-        $3 --scene scene.json --out out/ match.mkv
-    Requires ffmpeg and ffprobe on PATH.
+To turn your own recordings into *.positions.csv files, get the separate scrim-positions
+download.
 
 Source: https://github.com/AckbadP/ScrimSimulator
 EOF
 }
 
-package() { # <platform> <sim exe path> <ocr exe path> <undraco exe path>
+write_ocr_readme() { # <dir> <ocr exe>
+    cat > "$1/README.txt" <<EOF
+Scrim Positions ${VERSION}
+
+$2
+    OCRs a three-observer scrim recording into <video>.positions.csv:
+        $2 --scene scene.json --out out/ match.mkv
+    scene.json matches the OBS template in the source repository (docs/obs/); adjust its
+    panel rectangles if your layout differs. Requires ffmpeg and ffprobe on PATH.
+    Watch the result in the separate scrim-simulator download.
+
+Source: https://github.com/AckbadP/ScrimSimulator
+EOF
+}
+
+# Shipped in the simulator bundle and added to its match library on first run.
+DEMO_CSV="resouces/demo/match_03.positions.csv"
+DEMO_NAME="Demo match"
+
+new_stage() { # <bundle name>: an empty dist/<name>/
+    rm -rf "${DIST:?}/$1" "$DIST/$1.zip"
+    mkdir -p "$DIST/$1"
+}
+
+zip_stage() { # <bundle name>
+    (cd "$DIST" && zip -q -r "$1.zip" "$1")
+    log "built dist/$1.zip"
+}
+
+package_simulator() { # <platform> <sim exe path> <undraco exe path>
     local name="scrim-simulator-${VERSION}-$1-x86_64"
     local stage="$DIST/$name"
-    rm -rf "$stage" "$DIST/$name.zip"
-    mkdir -p "$stage"
-    cp "$2" "$3" "$4" "$stage/"
-    write_readme "$stage" "$(basename "$2")" "$(basename "$3")" "$(basename "$4")"
-    (cd "$DIST" && zip -q -r "$name.zip" "$name")
-    log "built dist/$name.zip"
+    new_stage "$name"
+    cp "$2" "$3" "$stage/"
+    # The CSV and its gamelogs dir must share a stem (MatchLibrary.logs_dir).
+    mkdir -p "$stage/demo/$DEMO_NAME.positions.logs"
+    cp "$DEMO_CSV" "$stage/demo/$DEMO_NAME.positions.csv"
+    cp "${DEMO_CSV%.csv}.logs/"*.txt "$stage/demo/$DEMO_NAME.positions.logs/"
+    write_simulator_readme "$stage" "$(basename "$2")" "$(basename "$3")"
+    zip_stage "$name"
+}
+
+package_ocr() { # <platform> <ocr exe path>
+    local name="scrim-positions-${VERSION}-$1-x86_64"
+    local stage="$DIST/$name"
+    new_stage "$name"
+    cp "$2" docs/obs/scene.json "$stage/"
+    write_ocr_readme "$stage" "$(basename "$2")"
+    zip_stage "$name"
 }
 
 build_linux() {
@@ -109,8 +149,8 @@ build_linux() {
     cargo build --release -p overview --bin scrim-positions -p glb-undraco
     log "exporting simulator (linux)"
     export_simulator "Linux" "export/linux/scrim-simulator.x86_64"
-    package linux simulator/export/linux/scrim-simulator.x86_64 target/release/scrim-positions \
-        target/release/glb-undraco
+    package_simulator linux simulator/export/linux/scrim-simulator.x86_64 target/release/glb-undraco
+    package_ocr linux target/release/scrim-positions
 }
 
 build_windows() {
@@ -125,8 +165,8 @@ build_windows() {
     cargo build --release -p overview --bin scrim-positions -p glb-undraco --target "$WIN_TARGET"
     log "exporting simulator (windows)"
     export_simulator "Windows Desktop" "export/windows/scrim-simulator.exe"
-    package windows simulator/export/windows/scrim-simulator.exe "target/$WIN_TARGET/release/scrim-positions.exe" \
-        "target/$WIN_TARGET/release/glb-undraco.exe"
+    package_simulator windows simulator/export/windows/scrim-simulator.exe "target/$WIN_TARGET/release/glb-undraco.exe"
+    package_ocr windows "target/$WIN_TARGET/release/scrim-positions.exe"
 }
 
 ensure_godot
