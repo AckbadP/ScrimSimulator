@@ -1813,14 +1813,16 @@ func _update_roster_cells() -> void:
 		return
 	for pilot in roster_buttons:
 		var motion := _motion(pilot)
-		if motion.is_empty():
+		var dead: bool = time >= ships[pilot].death_t
+		if not motion.is_empty():
+			roster_table.set_cell(pilot, "ship", motion.ship_type)
+		if motion.is_empty() or dead:
 			roster_table.set_cell(pilot, "speed", "—")
 			roster_table.set_cell(pilot, "distance", "—")
 		else:
-			roster_table.set_cell(pilot, "ship", motion.ship_type)
 			roster_table.set_cell(pilot, "speed", "—" if is_nan(motion.speed) else _fmt_speed(motion.speed))
 			roster_table.set_cell(pilot, "distance", "%.1f km" % motion.dist_km)
-		roster_buttons[pilot].modulate.a = 0.5 if time >= ships[pilot].death_t else 1.0
+		roster_buttons[pilot].modulate.a = 0.5 if dead else 1.0
 
 
 ## Roster abbreviation of a pilot name: the first word, then initials ("Tormund Some Name" ->
