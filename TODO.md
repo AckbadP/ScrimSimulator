@@ -14,11 +14,10 @@
 - pause, play, and navigation of video along with timeline
 - stop updating position of ships once it becomes a capsule
 - backtrack in time of 100km jump to calculate mjd activaton
-- interpolate smooth movement
 - incoming and outgoing ewar tracking based on combat log
 - togglable vectors for ship movement
 - kills on timeline
-- show boundry (125km sphere) and mjd activation range
+- show mjd activation range
 - instead of one unit 1km, should be 1 unit 1m
 - tooltips
 - basic menu for simulator 
@@ -27,8 +26,6 @@
 - selectable resolution
 - Measure tool to check distance between any two points
 - ability to asign shapes to ships or points (ie 30km shpear around ashimu) that can be color coded
-- anonomyzed example match I can publish and use for testing
 - right side menu should display speed and distance from center
-- right click to drag camera around
 - ability to center on beacons
 - button to re-center on center
