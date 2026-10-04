@@ -1,0 +1,68 @@
+name: test
+
+# Runs when a version tag is pushed, and only if the tagged commit is on master (a tag
+# trigger can't filter by branch, so the `master` job checks).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  master:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check tagged commit is on master
+        run: |
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::${GITHUB_REF_NAME} ($GITHUB_SHA) is not on master"
+            exit 1
+          fi
+
+  simulator:
+    needs: master
+    runs-on: ubuntu-latest
+    env:
+      GODOT_TAG: 4.6-stable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/godot
+          key: godot-${{ env.GODOT_TAG }}-linux
+
+      - name: Download Godot
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .cache/godot
+          curl -fL -o .cache/godot/godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -o -q .cache/godot/godot.zip -d .cache/godot
+          rm .cache/godot/godot.zip
+
+      - name: Run simulator tests
+        run: GODOT="$PWD/.cache/godot/Godot_v${GODOT_TAG}_linux.x86_64" scripts/test.sh
+
+  rust:
+    needs: master
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # crates/videoin shells out to ffmpeg/ffprobe for the video fixture tests.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # Release mode: the OCR-over-video test is very slow unoptimized.
+      - name: Run Rust tests
+        run: cargo test --workspace --release

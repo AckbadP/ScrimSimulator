@@ -1,47 +1,279 @@
-# scrim-recorder
+# Scrim Simulator
 
 **[Download the latest release](https://github.com/AckbadP/ScrimSimulator/releases/latest)**
-(Linux and Windows builds of the simulator and `scrim-positions`).
+(Linux and Windows).
 
-A tool that records everything that happened on an EVE Online grid — ship positions, velocities,
-pilots, ship types, and damage/effect events — as a compressed recording for later replay and
-simulation. Three or four stationary observer clients are recorded on video; every ship's position
-and velocity is recovered by multilaterating the distance and radial-velocity readings each
-observer's overview already displays, with the clients' own combat logs fused in for damage and
-effect events.
+Scrim Simulator turns a recording of an EVE Online scrim into a 3D replay you can scrub through,
+pause, and inspect from any angle.
 
-No EVE client process memory is read, and nothing automates or injects input — everything the
-pipeline consumes is either rendered on screen for the player to look at, or written to disk by
-the client itself.
+![A match playing back in the simulator](docs/media/playback.gif)
 
-**Status: design phase.** No implementation yet. See [`docs/DESIGN.md`](docs/DESIGN.md) for the
-full design: the multilateration math, OBS/capture requirements, the glyph-matching OCR approach
-(inspired by [darkmatter2222/EVE-Online-Bot](https://github.com/darkmatter2222/EVE-Online-Bot)),
-the on-disk recording format, and the validation plan.
+1. **Record.** Three stationary observer clients sit on grid while OBS records their overviews
+   into one video.
+2. **Process.** `scrim-positions` reads (OCRs) each observer's overview in every frame and works
+   out every ship's position from the three distances it sees, writing a `*.positions.csv`.
+3. **Watch.** The simulator replays that CSV in 3D: hull models, team colours, kills, micro jumps,
+   range spheres, a measuring tool, and optional match audio.
 
-## Simulator (`simulator/`)
+Nothing reads EVE client memory and nothing automates or injects input. The pipeline only uses
+what the client draws on screen for the player. See [`docs/DESIGN.md`](docs/DESIGN.md) for the
+full design and the maths.
 
-A standalone Godot 4.6 replay viewer for the `*.positions.csv` files written by `scrim-positions`.
-Each pilot is a placeholder sphere. Boxes mark the 100 km cube's corners and its centre.
+## What's in the downloads
+
+Each release has two zips per platform. You only need the first to watch matches.
+
+**`scrim-simulator-…zip`**, the replay viewer:
+
+| File | What it is |
+|---|---|
+| `scrim-simulator` (`.x86_64` / `.exe`) | The replay viewer. |
+| `glb-undraco` | Helper the simulator runs to unpack downloaded ship models. Keep it next to the simulator. |
+| `demo/` | The demo match and a combat log for it, added to the match list on first run. |
+
+**`scrim-positions-…zip`**, for processing your own recordings:
+
+| File | What it is |
+|---|---|
+| `scrim-positions` (`.exe`) | Turns a recorded match video into a `*.positions.csv`. Needs `ffmpeg` and `ffprobe` on your `PATH`. |
+| `scene.json` | Where each observer's overview is in a video recorded with the [OBS template](docs/obs/README.md). |
+
+## Quick start: watch the demo match
+
+1. Unzip the simulator download and run `scrim-simulator`.
+2. On first run it asks to download ship data: sizes from CCP's Static Data Export, bracket icons
+   from CCP's Image Export Collection, and hull models from
+   [EVE_Model_Gallery](https://github.com/EstamelGG/EVE_Model_Gallery). These go into `sde/` next
+   to the executable. Models are fetched one hull at a time, the first time a match needs one.
+3. **Demo match** is already in the match list. Select it and click **Open** (or double-click it).
+   If you remove it, it stays removed; add it back with **Add match…** and the file in `demo/`.
+4. Press **Start** (or Space).
+
+## Recording your own match
+
+[`docs/obs/`](docs/obs/README.md) has an OBS scene collection for recording three observer
+clients side by side, and explains how to set it up: which windows to capture, how to crop to the
+overview, and which video settings to use. Record near-lossless. The OCR needs crisp text.
+
+[`docs/eve/`](docs/eve/README.md) has an EVE client window layout for the observers (2486×1374
+windowed, UI scale 1.75) and explains how to copy it onto each observer character. The OBS
+template's crops are made for this layout, so if every observer uses it there is nothing to crop.
+
+## Processing a recording
+
+This uses `scrim-positions` from the separate `scrim-positions-…zip` download (or a source build).
 
 ```sh
-godot --path simulator -- --csv /abs/path/to/match_03.positions.csv
+scrim-positions --scene docs/obs/scene.json --out out/ match.mkv
 ```
 
-You can also load a CSV with the **Open CSV…** button, or by dropping the file onto the window.
-Controls: Space plays/pauses, ←/→ seek 10 s, the slider scrubs. Left/right drag orbits the camera,
-the wheel zooms, and middle drag pans.
+This writes `out/match.positions.csv`. `scene.json` tells it where each observer's overview is in
+the video frame. The one in `docs/obs/` matches the OBS template; adjust its panel rectangles if
+your layout differs.
 
-## Building releases
+The CSV has one row per pilot per second:
+`t,pilot,ship_type,x_m,y_m,z_m,speed_mps,dir_x,dir_y,dir_z,residual_m`.
 
-`scripts/build.sh [linux|windows|all]` builds the simulator (Godot export) and `scrim-positions`
-and zips each platform into `dist/`. It runs on Ubuntu; the Windows build is cross-compiled and
-needs `sudo apt install mingw-w64`. Godot 4.6 and its export templates are downloaded on first
-run if missing (set `$GODOT` to use a specific binary).
+### One match, with EVE timestamps
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds both platforms and attaches
-the zips to a GitHub Release:
+Give it the observer's Local chat log as well, and it processes just the match and stamps every
+row with its EVE time:
+
+```sh
+scrim-positions --scene docs/obs/scene.json --chat-log Local_20260404_174253_123.txt --out out/ match.mkv
+```
+
+[ScrimTrimmer](https://github.com/AckbadP/ScrimTrimmer) (a submodule in `third_party/`) reads the
+chat window recorded by the OBS template (the scene's `chat` rect), matches it against the log to
+find the EVE time at the start of the video, and finds the match in the log: from `CD` (or a bare
+`10, 9, 8…` countdown) to `WF`/`GF`. Only that window is OCR'd, and the CSV gains an `eve_time`
+column (ISO 8601 UTC, e.g. `2026-04-04T17:43:59.000Z`): the first row is the start of the data, the
+last row the end, and every tick in between can be lined up with combat logs and other EVE logs.
+
+- More than one CD→WF in the video: pick one with `--match N`.
+- `--t0 HH:MM:SS` gives the EVE time at video second 0 yourself, skipping the chat OCR.
+- `--tournament` uses the tournament system messages ("30 seconds until match start",
+  "Match completed!") instead.
+- Without `--chat-log`, `--t0 2026-04-04T17:43:55Z` stamps the whole video with EVE times.
+
+This needs a source checkout (it runs `scripts/scrim_trimmer_bridge.py`), Python 3 and Tesseract:
+
+```sh
+git submodule update --init            # or clone with --recurse-submodules
+sudo apt install tesseract-ocr         # Windows: the UB-Mannheim Tesseract build, on PATH
+pip install -r scripts/requirements-trimmer.txt
+```
+
+Set `$SCRIM_PYTHON` (or `--python`) to use a different interpreter, e.g. a virtualenv's.
+
+## Using the simulator
+
+### Match list
+
+The main menu lists the matches you have added. **Add match…** adds a `*.positions.csv`, and
+dropping a CSV onto the window adds it and opens it straight away. Select a match and use
+**Rename…**, **Remove** or **Add audio…** (also on its right-click menu). Audio (ogg, mp3 or wav) should start at the same moment
+as the match data; it then plays in sync with the replay, at any playback speed.
+[ScrimTrimmer](https://github.com/AckbadP/ScrimTrimmer) can extract a match's audio for this.
+**Menu** returns
+to the list.
+
+Matches can be sorted into folders, nested as deep as you like. **New folder…** makes one (inside
+the selected folder, if any); move a match or folder by dragging it onto another folder (or onto
+empty space for the top level), or with **Move to** on its right-click menu. Rename and remove
+work on folders too; removing a folder deletes the matches in it.
+
+**Add folder…** (or dropping a folder onto the window) adds a whole scrim at once: every
+`*.csv` in the folder becomes a match in a library folder of the same name. Audio files in it are
+paired with matches by name — `match_03.positions.csv` with `match_03.mp3` — or, failing that, by
+the number the names end in, so `clip_001.positions.csv` pairs with ScrimTrimmer's
+`match_001.mp3`. Gamelogs (`*.txt`) in it are tried against every match, each keeping only the
+combat during it (see below). Adding the same folder again changes nothing.
+
+Right-click a match → **Add combat logs…** to attach EVE gamelogs
+(`Documents/EVE/logs/Gamelogs/*.txt`), one per pilot whose combat you have. Each log is matched to
+the pilot whose name is its listener's (allowing for names the overview cut short) and lined up
+with the replay by EVE time, so the match's CSV needs an `eve_time` column (see
+[One match, with EVE timestamps](#one-match-with-eve-timestamps)). Only the part of a log written
+during the match is saved; the rest is discarded, and a log with no combat during the match isn't
+added. Logs saved in a `<csv name without .csv>.logs/` folder next to a CSV come along when the
+CSV is added, as the demo match's does.
+
+With logs attached, the roster gains combat columns: **Dmg in/out**, **Reps in/out** and **Cap
+in/out** (HP or GJ per second over the last 10 s of the replay; cap counts neuts and nosferatus),
+and **EWAR in/out**, an icon per kind of electronic warfare on or by the pilot at that moment —
+scrams, disruptors, neuts, nosferatus and ECM jams. Each lasts its module's cycle, estimated from
+the log (overheating can make it a little off). Hover an icon for who it is from or to and how
+many cycles so far. Events seen in several logs are counted once; drones and pilots that can't be
+matched to the replay are left out. Columns with no data are hidden, and like the others they can
+be moved, resized or hidden from the roster header. EVE gamelogs don't record sensor dampeners,
+tracking or guidance disruptors, target painters, or remote sensor boosters and tracking
+computers, so those never show. EWAR icons come with the ship icon download; if you downloaded it
+before this feature, download it again in Settings to get them (until then they show as text).
+
+Right-click a pilot → **Get Damage Breakdown** opens a window of the damage coming in on that pilot
+from each attacker: pilot, ship and DPS (over the last 10 s, like the roster), highest first, with
+the total. It follows the replay as it plays or is scrubbed. The windows can be moved and closed,
+and several can be open at once, one per pilot.
+
+Added matches are copied into the simulator's own library
+(`~/.local/share/godot/app_userdata/simulator/matches` on Linux), so they stay available if you
+move or delete the original file. Team swaps (⇄ in the roster) and team names (double-click a
+team's heading) are saved per match. Pilot renames (right-click a pilot → **Rename pilot…**) apply
+in every match, and an empty name restores the original.
+
+![Orbiting the camera while a match plays](docs/media/orbit.gif)
+
+### Controls
+
+| Input | Action |
+|---|---|
+| Space / **Play** | Play or pause (matches open paused) |
+| ← / → | Pause and step one tick (1 s) |
+| `[` / `]` | Jump to the previous / next event on the timeline (kills, boundary deaths, micro jumps) |
+| Timeline slider | Scrub |
+| Left drag (empty space) | Orbit the camera |
+| Mouse wheel | Zoom |
+| Right drag | Pan |
+| Click a ship | Select it and show its details top left |
+| Double-click a ship | Follow it with the camera |
+| Esc / click empty space | Clear the selection |
+| Left drag from a ship | Measure: a sphere grows from the ship and brackets every ship it reaches. Drag onto another ship for the hull-to-hull distance. |
+| Right-click a ship (in space or roster) | Its debug menu: rename, damage breakdown, movement vector and any number of coloured range spheres |
+| D / **Debug…** | Debug menu for every ship at once, vector length, and the beacons' 5 km jump range |
+| M | Toggle hull models and icons vs. plain spheres |
+| B | Toggle the 125 km arena boundary |
+
+![Measuring from one ship to another](docs/media/measure.gif)
+
+**Settings…** has the remaining options: interface scale, **Ship overlay…** (which of name, type,
+distance and speed are shown above each ship), smooth vs. straight-line movement, and the
+SDE/model download controls. Resize the window to see more of the arena.
+
+## Building from source
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable)
+- [Godot 4.6](https://godotengine.org/download) on your `PATH` as `godot`, or set `$GODOT` to its
+  binary. `scripts/build.sh` downloads Godot and its export templates itself if they're missing.
+- `ffmpeg` and `ffprobe` to run `scrim-positions` and the Rust tests
+- For Windows release builds (cross-compiled from Ubuntu): `sudo apt install mingw-w64`
+
+### Repository layout
+
+| Path | Contents |
+|---|---|
+| `crates/glyph` | Glyph-template OCR for EVE's UI font |
+| `crates/videoin` | Frame decoding via `ffmpeg` |
+| `crates/overview` | Overview parsing, tracking and trilateration; the `scrim-positions` and `overview-track` binaries |
+| `third_party/ScrimTrimmer` | Submodule: finds a match and its EVE time in a recording + chat log (`--chat-log`) |
+| `crates/glb-undraco` | Converts the model gallery's Draco-compressed GLBs into ones Godot can load |
+| `simulator/` | The Godot replay viewer (`scripts/`, headless tests in `tests/`) |
+| `docs/` | Design document, the OBS template and the EVE observer window layout |
+| `resouces/` | Demo match and OCR sample images |
+| `scripts/` | Build, test and README GIF scripts; the ScrimTrimmer bridge |
+
+### Run from source
+
+```sh
+# Position extraction
+cargo run --release -p overview --bin scrim-positions -- --scene docs/obs/scene.json --out out/ match.mkv
+
+# Simulator (it finds glb-undraco in target/release/)
+cargo build --release -p glb-undraco
+godot --path simulator                                      # main menu
+godot --path simulator -- --csv /abs/path/to/match.positions.csv  # open one file directly
+```
+
+`--csv` opens a file without adding it to the library, so team swaps and names last only until you
+quit. When running from source, downloaded ship data goes into `simulator/sde/`.
+
+### Tests
+
+```sh
+cargo test --workspace --release   # Rust crates (release: the video OCR test is slow unoptimised)
+scripts/test.sh                    # simulator tests, headless (uses $GODOT or `godot`)
+scripts/test.sh match_data         # only simulator test files whose name contains "match_data"
+python3 -m unittest scripts/test_trimmer_bridge.py   # ScrimTrimmer bridge (needs the submodule)
+```
+
+Simulator tests live in `simulator/tests/`. Each `test_*.gd` extends `tests/test_case.gd`, and
+every `test_*` method is a test.
+
+### README GIFs
+
+```sh
+scripts/readme_gifs.sh             # re-render docs/media/{playback,measure,orbit}.gif
+scripts/readme_gifs.sh measure     # just one
+```
+
+Each GIF is scripted in `simulator/tools/readme_gif.gd` against the demo match and recorded with
+Godot's Movie Maker, so re-running gives the same result. It needs a display and the demo's hull
+models already downloaded (open the demo once first).
+
+### Release builds
+
+```sh
+scripts/build.sh [linux|windows|all]   # default: all
+```
+
+This builds the simulator (Godot export), `glb-undraco` and `scrim-positions` and zips each
+platform into `dist/`.
+
+To publish a release, push a `v*` tag on a commit that's on `master`:
 
 ```sh
 git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0
 ```
+
+`.github/workflows/release.yml` builds both platforms and attaches the zips to a GitHub Release.
+`.github/workflows/test.yml` runs both test suites for the tag and fails if the commit isn't on
+`master`.
+
+## Credits
+
+- Ship sizes: CCP's Static Data Export. Bracket icons: CCP's Image Export Collection.
+- Hull models: [EstamelGG/EVE_Model_Gallery](https://github.com/EstamelGG/EVE_Model_Gallery).
+- OCR approach inspired by
+  [darkmatter2222/EVE-Online-Bot](https://github.com/darkmatter2222/EVE-Online-Bot).
