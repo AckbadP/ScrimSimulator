@@ -1,12 +1,8 @@
-## Capture setup (OBS / EVE clients)
-- fix eve client window setup
-- fix obs scene
-
 ## Position pipeline (crates)
 - may bug when ship comes close enough that distance becomes m instead of km
 - bug where some ships seem to be moved out of bounds erroneously
 - gpu acceleration
-- pipelone should also extract audio at same time and save it with match data for uploade using scrimTrimmer audio extraction option
+- pipeline should also extract audio at same time and save it with match data for uploade using scrimTrimmer audio extraction option
 
 ## Test data (resouces)
 
@@ -22,7 +18,5 @@
 - ability to center on beacons
 - button to re-center on center
 - when a ship dies it should show just a bar for the speed and distance rather than the true distance
-- add some basic .gifs for the README
 - shift + arrow keys to seek forward or back 10s
 - option to hide dead ships (or just movement of dead pilots)
-- user should be able to upload a combat log and select a match or folder it is associated with. The data gets parsed and saved to the library, discarding any data that dosen't fall within a match

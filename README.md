@@ -55,6 +55,10 @@ Each release has two zips per platform. You only need the first to watch matches
 clients side by side, and explains how to set it up: which windows to capture, how to crop to the
 overview, and which video settings to use. Record near-lossless. The OCR needs crisp text.
 
+[`docs/eve/`](docs/eve/README.md) has an EVE client window layout for the observers (2486×1374
+windowed, UI scale 1.75) and explains how to copy it onto each observer character. The OBS
+template's crops are made for this layout, so if every observer uses it there is nothing to crop.
+
 ## Processing a recording
 
 This uses `scrim-positions` from the separate `scrim-positions-…zip` download (or a source build).
@@ -147,6 +151,11 @@ tracking or guidance disruptors, target painters, or remote sensor boosters and 
 computers, so those never show. EWAR icons come with the ship icon download; if you downloaded it
 before this feature, download it again in Settings to get them (until then they show as text).
 
+Right-click a pilot → **Get Damage Breakdown** opens a window of the damage coming in on that pilot
+from each attacker: pilot, ship and DPS (over the last 10 s, like the roster), highest first, with
+the total. It follows the replay as it plays or is scrubbed. The windows can be moved and closed,
+and several can be open at once, one per pilot.
+
 Added matches are copied into the simulator's own library
 (`~/.local/share/godot/app_userdata/simulator/matches` on Linux), so they stay available if you
 move or delete the original file. Team swaps (⇄ in the roster) and team names (double-click a
@@ -170,7 +179,7 @@ in every match, and an empty name restores the original.
 | Double-click a ship | Follow it with the camera |
 | Esc / click empty space | Clear the selection |
 | Left drag from a ship | Measure: a sphere grows from the ship and brackets every ship it reaches. Drag onto another ship for the hull-to-hull distance. |
-| Right-click a ship (in space or roster) | Its debug menu: movement vector and any number of coloured range spheres |
+| Right-click a ship (in space or roster) | Its debug menu: rename, damage breakdown, movement vector and any number of coloured range spheres |
 | D / **Debug…** | Debug menu for every ship at once, vector length, and the beacons' 5 km jump range |
 | M | Toggle hull models and icons vs. plain spheres |
 | B | Toggle the 125 km arena boundary |
@@ -201,7 +210,7 @@ SDE/model download controls. Resize the window to see more of the arena.
 | `third_party/ScrimTrimmer` | Submodule: finds a match and its EVE time in a recording + chat log (`--chat-log`) |
 | `crates/glb-undraco` | Converts the model gallery's Draco-compressed GLBs into ones Godot can load |
 | `simulator/` | The Godot replay viewer (`scripts/`, headless tests in `tests/`) |
-| `docs/` | Design document and the OBS template |
+| `docs/` | Design document, the OBS template and the EVE observer window layout |
 | `resouces/` | Demo match and OCR sample images |
 | `scripts/` | Build, test and README GIF scripts; the ScrimTrimmer bridge |
 
