@@ -254,7 +254,7 @@ func test_pan_stops_tracking() -> void:
 	m._set_tracked("blue")
 	var ev := InputEventMouseMotion.new()
 	ev.relative = Vector2(50, 0)
-	ev.button_mask = MOUSE_BUTTON_MASK_MIDDLE
+	ev.button_mask = MOUSE_BUTTON_MASK_RIGHT
 	m.camera._unhandled_input(ev)
 	assert_eq(m.tracked, "")
 

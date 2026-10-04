@@ -57,28 +57,28 @@ func test_drag_rotates_and_clamps_pitch() -> void:
 	var yaw: float = cam.yaw
 	_drag(cam, Vector2(100, 0), MOUSE_BUTTON_MASK_LEFT)
 	assert_almost(cam.yaw, yaw - 100 * OrbitCamera.ROTATE_SPEED)
-	_drag(cam, Vector2(0, 10000), MOUSE_BUTTON_MASK_RIGHT)
+	_drag(cam, Vector2(0, 10000), MOUSE_BUTTON_MASK_LEFT)
 	assert_eq(cam.pitch, 1.55)
 	_drag(cam, Vector2(0, -20000), MOUSE_BUTTON_MASK_LEFT)
 	assert_eq(cam.pitch, -1.55)
 	_assert_orbiting(cam)
 
 
-func test_middle_drag_pans_target() -> void:
+func test_right_drag_pans_target() -> void:
 	var cam := _camera()
 	var target: Vector3 = cam.target
-	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_MIDDLE)
+	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_RIGHT)
 	assert_ne(cam.target, target)
 	_assert_orbiting(cam)
 
 
-func test_middle_drag_emits_panned() -> void:
+func test_right_drag_emits_panned() -> void:
 	var cam := _camera()
 	var panned := [false]
 	cam.panned.connect(func(): panned[0] = true)
 	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_LEFT)
 	assert_false(panned[0], "rotate is not a pan")
-	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_MIDDLE)
+	_drag(cam, Vector2(50, 0), MOUSE_BUTTON_MASK_RIGHT)
 	assert_true(panned[0])
 
 
