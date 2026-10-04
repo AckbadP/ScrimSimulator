@@ -31,3 +31,7 @@
 - speed should auto-truncate to km with 1 decimal at or above 1 km/s, and it should not be interpolated instead showing the actual speed value for each step
 - when a ship dies it should sno just a bar for the speed and distance rather then the true distance
 - Ability to sync with audio from scrim
+- popup menues should not be transparent, move the boundry and ship model toggles into the settings menu
+- spacebar to pause and unpause. arrow keys to advance one tick at a time
+- maim menu where user can select from already uploaded matches. Match settings should persist between sessions (team assignments, team re-names, display settings)
+- menu to mosify what is displayed over a ship (selectable name, type, dist, speed)
