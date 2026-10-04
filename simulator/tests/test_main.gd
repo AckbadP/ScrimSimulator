@@ -250,6 +250,52 @@ func test_drop_audio_onto_open_match() -> void:
 	assert_eq(m.data.start_time, 0.0)
 
 
+## A library match with EVE times (14:03:14 on), and a gamelog of its pilot "Tormund Vasquet".
+func _logged_match() -> Array:
+	var rows := []
+	for t in [0, 2, 4, 6]:
+		rows.append(row(t, "Tormund Vasquet", "Deimos", C + X * 1000.0 * t) + ["2026-10-03T14:03:%02d.000Z" % (14 + t)])
+	var path := MatchLibrary.add(write_csv(rows, DEFAULT_HEADER + ",eve_time"))
+	var gamelog := temp_dir().path_join("20261003_124532_1.txt")
+	var f := FileAccess.open(gamelog, FileAccess.WRITE)
+	f.store_string("  Listener: Tormund Vasquette\n[ 2026.10.03 14:03:16 ] (combat) 204 to Someone[X](Magus) - 250mm Railgun II - Hits\n")
+	f.close()
+	return [path, gamelog]
+
+
+func test_menu_adds_combat_logs() -> void:
+	var made := _logged_match()
+	var m := _main()
+	m.load_match(made[0])
+	assert_eq(m.data.combat_logs, [])
+	m._show_menu()
+	var not_a_log := temp_dir().path_join("notes.txt")
+	FileAccess.open(not_a_log, FileAccess.WRITE).store_string("hello")
+	m.menu.add_logs(PackedStringArray([made[1], not_a_log]))
+	assert_true(m.menu.error_label.visible, "notes.txt refused")
+	assert_eq(MatchLibrary.log_paths(made[0]).size(), 1)
+	assert_eq(m.data.combat_logs.size(), 1, "open match picks it up")
+	assert_eq(m.data.combat_logs[0].pilot, "Tormund Vasquet")
+	assert_eq(m.data.combat_logs[0].entries[0].t, 2.0)
+	m.menu.open_context_menu(Vector2(10, 10))
+	var menu: PopupMenu = m.menu.context_menu
+	assert_false(menu.is_item_disabled(menu.get_item_index(MainMenu.MenuItem.REMOVE_LOGS)))
+	menu.id_pressed.emit(MainMenu.MenuItem.REMOVE_LOGS)
+	assert_eq(MatchLibrary.log_paths(made[0]), [])
+	assert_eq(m.data.combat_logs, [])
+
+
+func test_log_pilot_override_survives_meta_save() -> void:
+	var made := _logged_match()
+	MatchLibrary.add_log(made[0], made[1])
+	MatchLibrary.save_meta(made[0], {"log_pilots": {made[1].get_file(): "nobody"}})
+	var m := _main()
+	m.load_match(made[0])
+	assert_eq(m.log_pilots, {made[1].get_file(): "nobody"})
+	m._save_meta()
+	assert_eq(MatchLibrary.load_meta(made[0]).log_pilots, {made[1].get_file(): "nobody"})
+
+
 func test_load_bad_file() -> void:
 	var m := _main()
 	m.load_match(temp_dir().path_join("missing.positions.csv"))

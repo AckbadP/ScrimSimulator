@@ -100,6 +100,9 @@ var team_overrides := {}
 ## Team -> name given to it in this match (Blue/Red only; default `TEAM_NAMES`), saved like
 ## `team_overrides`.
 var team_names := {}
+## Gamelog file name -> pilot it belongs to, where the listener's name doesn't pick the right one
+## (see `CombatLog.sync`); saved like `team_overrides`.
+var log_pilots := {}
 ## CSV pilot name -> display name, for every match (setting `names/pilots`).
 var pilot_names: Dictionary = Settings.get_value("names/pilots").duplicate()
 ## pilot -> { vector: bool, spheres: [{ radius_km, color }] } from the debug menus; kept when the
@@ -263,6 +266,7 @@ func load_match(path: String) -> bool:
 		var meta := MatchLibrary.load_meta(path) if MatchLibrary.contains(path) else {}
 		team_overrides = meta.get("teams", {})
 		team_names = meta.get("team_names", {})
+		log_pilots = meta.get("log_pilots", {})
 		debug.clear()
 		start_button.visible = true
 	for pilot in team_overrides:
@@ -292,6 +296,7 @@ func load_match(path: String) -> bool:
 		print("  %s: %s" % [pilot, MatchData.Team.find_key(data.teams[pilot])])
 	for pilot in data.deaths:
 		print("  %s: out of bounds at %s" % [pilot, _fmt_time(data.deaths[pilot].t)])
+	_load_combat_logs()
 	_seek(0.0)
 	_set_playing(not start_button.visible)
 	return true
@@ -327,10 +332,38 @@ func _on_menu_audio_changed(path: String) -> void:
 	menu.visible = in_menu
 
 
-## Saves this match's team swaps and names, if it is in the library.
+## A library match's combat logs changed: the open one reloads them.
+func _on_menu_logs_changed(path: String) -> void:
+	if path == match_path and data != null:
+		_load_combat_logs()
+
+
+## Reads the open match's gamelogs (`MatchLibrary.log_paths`, also next to a CSV outside the
+## library) into `data.combat_logs`, synced to it and attributed to its pilots (or as
+## `log_pilots` says).
+func _load_combat_logs() -> void:
+	data.combat_logs = []
+	var paths := MatchLibrary.log_paths(match_path)
+	if not paths.is_empty() and not data.has_eve_time():
+		print("  %d combat log(s) ignored: the CSV has no eve_time column" % paths.size())
+		return
+	for file: String in paths:
+		var gamelog := CombatLog.load_file(file)
+		if gamelog == null:
+			continue
+		gamelog.sync(data, log_pilots.get(file.get_file(), ""))
+		data.combat_logs.append(gamelog)
+		print("  log %s: %s -> %s, %d entries" % [file.get_file(), gamelog.listener,
+			gamelog.pilot if gamelog.pilot != "" else "(unattributed)", gamelog.entries.size()])
+
+
+## Saves this match's team swaps and names (and gamelog attributions), if it is in the library.
 func _save_meta() -> void:
 	if MatchLibrary.contains(match_path):
-		MatchLibrary.save_meta(match_path, {"teams": team_overrides, "team_names": team_names})
+		var meta := {"teams": team_overrides, "team_names": team_names}
+		if not log_pilots.is_empty():
+			meta.log_pilots = log_pilots
+		MatchLibrary.save_meta(match_path, meta)
 
 
 ## `pilot`'s display name: its alias (see `pilot_names`) or its CSV name.
@@ -1594,6 +1627,7 @@ func _build_ui() -> void:
 	menu.resumed.connect(func(): menu.visible = false)
 	menu.match_renamed.connect(_on_menu_match_renamed)
 	menu.audio_changed.connect(_on_menu_audio_changed)
+	menu.logs_changed.connect(_on_menu_logs_changed)
 	menu_layer.add_child(menu)
 
 

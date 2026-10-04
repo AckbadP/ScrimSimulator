@@ -214,6 +214,62 @@ func test_viewer_loads_demo() -> void:
 		"match_03.positions.csv — 20 pilots (blue 10 / red 9 / unknown 1), 3 out of bounds")
 
 
+# --- combat log --------------------------------------------------------------------
+
+static func demo_log_path() -> String:
+	return MatchLibrary.log_paths(demo_path())[0]
+
+
+func test_demo_log_is_anonymized() -> void:
+	assert_eq(MatchLibrary.log_paths(demo_path()).size(), 1)
+	var gamelog := CombatLog.load_file(demo_log_path())
+	assert_not_null(gamelog)
+	assert_not_null(RegEx.create_from_string(PILOT_PATTERN).search(gamelog.listener), gamelog.listener)
+	var name_re := RegEx.create_from_string("^(?:(Amarr|Caldari|Gallente|Minmatar) Citizen \\d{7}|.* (Bot I|SW-300))$")
+	for e in gamelog.entries:
+		for who in [e.source, e.target]:
+			if who != "" and name_re.search(who) == null:
+				fail("not anonymized: %s in %s" % [who, e.text])
+				return
+		for ship in [e.source_ship, e.target_ship]:
+			if ship != "" and not HULL_RADII.has(ship) and name_re.search(ship) == null:
+				fail("not a mining hull: %s in %s" % [ship, e.text])
+				return
+
+
+func test_demo_log_syncs_to_match() -> void:
+	var d := _load()
+	var gamelog := CombatLog.load_file(demo_log_path())
+	gamelog.sync(d)
+	assert_eq(gamelog.pilot, "Caldari Citizen 6206817", "the Skiff")
+	assert_eq(_ship_at(d, gamelog.pilot, 0.0), "Skiff")
+	assert_eq(gamelog.entries.size(), 832)
+	var first: Dictionary = gamelog.entries[0]
+	assert_eq(first.t, 7.0, "14:03:30 is 16 s after the CSV starts, 7 s after match time 0")
+	assert_eq(first.kind, CombatLog.Kind.DAMAGE)
+	assert_eq(first.source_pilot, gamelog.pilot)
+	assert_eq(first.target_pilot, "Caldari Citizen 3216932")
+	assert_eq(_ship_at(d, first.target_pilot, first.t), first.target_ship)
+	var attributed := 0
+	for e in gamelog.entries:
+		if e.t < -d.start_time - MatchData.MAX_GAP_S or e.t > d.duration + MatchData.MAX_GAP_S:
+			fail("entry outside the match: %s at %s" % [e.text, e.t])
+			return
+		for p in [e.source_pilot, e.target_pilot]:
+			if p != "" and not d.tracks.has(p):
+				fail("%s is not a pilot" % p)
+				return
+		if e.source_pilot != "" and e.target_pilot != "":
+			attributed += 1
+	assert_true(attributed > gamelog.entries.size() * 0.9, "%d of %d entries have both pilots" % [attributed, gamelog.entries.size()])
+
+
+func test_viewer_loads_demo_combat_log() -> void:
+	var m := _viewer()
+	assert_eq(m.data.combat_logs.size(), 1)
+	assert_eq(m.data.combat_logs[0].pilot, "Caldari Citizen 6206817")
+
+
 func test_viewer_plays_through() -> void:
 	var m := _viewer()
 	m.speed = 10.0

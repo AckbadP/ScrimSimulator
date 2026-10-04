@@ -104,6 +104,15 @@ as the match data; it then plays in sync with the replay, at any playback speed.
 **Menu** returns
 to the list.
 
+Right-click a match → **Add combat logs…** to attach EVE gamelogs
+(`Documents/EVE/logs/Gamelogs/*.txt`), one per pilot whose combat you have. Each log is matched to
+the pilot whose name is its listener's (allowing for names the overview cut short) and lined up
+with the replay by EVE time, so the match's CSV needs an `eve_time` column (see
+[One match, with EVE timestamps](#one-match-with-eve-timestamps)). Only the part of a log written
+during the match is saved; the rest is discarded, and a log with no combat during the match isn't
+added. They aren't shown in the viewer yet. Logs saved in a `<csv name without .csv>.logs/` folder
+next to a CSV come along when the CSV is added, as the demo match's does.
+
 Added matches are copied into the simulator's own library
 (`~/.local/share/godot/app_userdata/simulator/matches` on Linux), so they stay available if you
 move or delete the original file. Team swaps (⇄ in the roster) and team names (double-click a
