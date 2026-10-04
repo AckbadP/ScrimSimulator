@@ -8,6 +8,9 @@ extends RefCounted
 
 ## Overridable so tests never touch the real library.
 static var dir := "user://matches"
+## Where the release bundle keeps the demo match (`demo/` next to the executable, see
+## `demo_source`). Overridable so tests never touch the real one.
+static var demo_dir := ""
 ## Audio formats Godot can load at runtime.
 const AUDIO_EXTENSIONS := ["ogg", "mp3", "wav"]
 
@@ -38,6 +41,33 @@ static func display_name(file: String) -> String:
 		if file.to_lower().ends_with(ext):
 			return file.left(file.length() - ext.length())
 	return file
+
+
+## The demo match's CSV shipped with the release (in `demo_dir`, else `demo/` next to the
+## executable), or "" if there is none. Never found when run from source.
+static func demo_source() -> String:
+	var d := demo_dir
+	if d == "":
+		if OS.has_feature("editor"):
+			return ""
+		d = OS.get_executable_path().get_base_dir().path_join("demo")
+	if not DirAccess.dir_exists_absolute(d):
+		return ""
+	for file in DirAccess.get_files_at(d):
+		if file.get_extension().to_lower() == "csv":
+			return d.path_join(file)
+	return ""
+
+
+## Adds the demo match (and its gamelogs) to the library the first time it is found; once added,
+## it is never added again, so removing it sticks.
+static func add_demo() -> void:
+	if Settings.get_value("library/demo_added"):
+		return
+	var src := demo_source()
+	if src == "" or add(src) == "":
+		return
+	Settings.set_value("library/demo_added", true)
 
 
 ## Copies `src` into the library and returns the copy's path ("" on failure). A file already
