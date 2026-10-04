@@ -74,6 +74,11 @@ struct Cli {
     /// the match window instead of CD and WF/GF.
     #[arg(long)]
     tournament: bool,
+    /// Decode the video on the GPU with this ffmpeg `-hwaccel` (e.g. `cuda` for NVDEC, `vaapi`),
+    /// leaving the CPU cores to OCR. Same frames either way; ffmpeg falls back to software decode
+    /// when the accelerator isn't available.
+    #[arg(long, env = "SCRIM_HWACCEL", value_name = "API")]
+    hwaccel: Option<String>,
     /// Python interpreter that runs the ScrimTrimmer bridge.
     #[arg(long, env = "SCRIM_PYTHON", default_value = "python3")]
     python: String,
@@ -233,7 +238,7 @@ fn main() -> Result<()> {
             })
         }
         .with_context(|| format!("finding the match in {}", video.display()))?;
-        let eve_span = process_video(video, &scene, &font, cli.fps, &cli.out, &window)
+        let eve_span = process_video(video, &scene, &font, cli.fps, cli.hwaccel.as_deref(), &cli.out, &window)
             .with_context(|| format!("processing {}", video.display()))?;
         if !cli.no_audio {
             save_audio(video, &cli.out, &window);
@@ -408,11 +413,17 @@ fn process_video(
     scene: &Scene,
     font: &Font,
     fps: f64,
+    hwaccel: Option<&str>,
     out: &Path,
     window: &Window,
 ) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
     let started = std::time::Instant::now();
-    let mut decoder = videoin::Decoder::open_range(video, Some(fps), window.start_s, window.end_s)?;
+    let batch_size = 2 * rayon::current_num_threads();
+    // Decode on a background thread, one batch ahead, so ffmpeg keeps decoding while a batch is
+    // OCR'd instead of stalling on a full pipe.
+    let mut decoder =
+        videoin::Decoder::open_range_hw(video, Some(fps), window.start_s, window.end_s, hwaccel)?
+            .prefetch(batch_size);
     println!(
         "== {}: {}x{}, sampling at {fps} fps",
         video.display(),
@@ -451,7 +462,6 @@ fn process_video(
 
     let mut trackers: Vec<Tracker> = panels.iter().map(|_| Tracker::new()).collect();
     let mut times = Vec::new();
-    let batch_size = 2 * rayon::current_num_threads();
     loop {
         while pending.len() < batch_size {
             match decoder.next_frame()? {
