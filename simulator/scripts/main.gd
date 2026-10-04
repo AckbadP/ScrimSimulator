@@ -34,14 +34,33 @@ const TEAM_COLORS := {
 	MatchData.Team.RED: Color(1.0, 0.25, 0.2),
 	MatchData.Team.UNKNOWN: Color(0.6, 0.6, 0.6),
 }
+const TEAM_NAMES := {
+	MatchData.Team.BLUE: "Blue",
+	MatchData.Team.RED: "Red",
+	MatchData.Team.UNKNOWN: "Unknown",
+}
+const ROSTER_WIDTH := 260.0
+## A click lands on a ship within this many pixels of its centre (or anywhere on its hull).
+const PICK_PX := 14.0
+## A left press released within this many pixels is a click; further is a camera drag.
+const CLICK_SLOP_PX := 4.0
+## The selection bracket is this many times the size of the overview icon.
+const SELECT_SCALE := 1.8
+const SELECT_COLOR := Color(1, 1, 1, 0.9)
 
 var data: MatchData
 var match_path := ""
 var time := 0.0
 var playing := false
 var speed := 1.0
+## Pilot the camera stays centred on ("" = free camera).
+var tracked := ""
+## Pilot picked by clicking it in space ("" = none); shown in the info panel.
+var selected := ""
+## pilot -> Team picked with the roster's swap button; kept when the same match reloads.
+var team_overrides := {}
 
-## pilot -> { node, visual, model_id, icon, label, ship_type, radius, dead, color, tint, death_t,
+## pilot -> { node, visual, model_id, icon, select_icon, label, ship_type, radius, dead, color, tint, death_t,
 ## death_marker, heading, heading_t }; `heading` is the model's rotation as of match time
 ## `heading_t`; `radius` is the true hull radius in scene units (0 if unknown), `visual` the
 ## sphere or model under `node`, `model_id` the type ID it shows (0 = sphere), `tint` the colour
@@ -73,7 +92,17 @@ var sde_label: Label
 var settings_popup: PopupPanel
 var download_dialog: ConfirmationDialog
 var assets_dialog: ConfirmationDialog
+var bottom_panel: PanelContainer
+var roster_panel: PanelContainer
+var roster_box: VBoxContainer
+var roster_scroll: ScrollContainer
+var info_panel: PanelContainer
+var info_label: Label
+var select_texture: Texture2D
+## pilot -> its toggle Button in the roster.
+var roster_buttons := {}
 var _scrubbing := false
+var _press_pos := Vector2.INF
 
 
 func _ready() -> void:
@@ -117,6 +146,11 @@ func load_match(path: String) -> void:
 		return
 	data = d
 	data.smooth = smooth_on
+	if path != match_path:
+		team_overrides.clear()
+	for pilot in team_overrides:
+		if data.teams.has(pilot):
+			data.teams[pilot] = team_overrides[pilot]
 	match_path = path
 	for c in ships_root.get_children():
 		c.queue_free()
@@ -125,14 +159,13 @@ func load_match(path: String) -> void:
 		_add_ship(pilot)
 	_fetch_models()
 	timeline.max_value = data.duration
-	var counts := {MatchData.Team.BLUE: 0, MatchData.Team.RED: 0, MatchData.Team.UNKNOWN: 0}
-	for pilot in data.teams:
-		counts[data.teams[pilot]] += 1
-	file_label.text = "%s — %d pilots (blue %d / red %d / unknown %d), %d out of bounds" % [
-		path.get_file(), ships.size(),
-		counts[MatchData.Team.BLUE], counts[MatchData.Team.RED], counts[MatchData.Team.UNKNOWN],
-		data.deaths.size(),
-	]
+	if not ships.has(tracked):
+		tracked = ""
+	if not ships.has(selected):
+		selected = ""
+	_update_file_label()
+	_refresh_roster()
+	_select(selected)
 	print("Loaded %s: %d pilots, %.0f s" % [path, ships.size(), data.duration])
 	for pilot in data.teams:
 		print("  %s: %s" % [pilot, MatchData.Team.find_key(data.teams[pilot])])
@@ -140,6 +173,17 @@ func load_match(path: String) -> void:
 		print("  %s: out of bounds at %s" % [pilot, _fmt_time(data.deaths[pilot].t)])
 	_seek(0.0)
 	_set_playing(true)
+
+
+func _update_file_label() -> void:
+	var counts := {MatchData.Team.BLUE: 0, MatchData.Team.RED: 0, MatchData.Team.UNKNOWN: 0}
+	for pilot in data.teams:
+		counts[data.teams[pilot]] += 1
+	file_label.text = "%s — %d pilots (blue %d / red %d / unknown %d), %d out of bounds" % [
+		match_path.get_file(), ships.size(),
+		counts[MatchData.Team.BLUE], counts[MatchData.Team.RED], counts[MatchData.Team.UNKNOWN],
+		data.deaths.size(),
+	]
 
 
 ## New SDE data: reload the match so sizes and boundary deaths use it, keeping playback state.
@@ -228,13 +272,22 @@ func _process(delta: float) -> void:
 			time = data.duration
 			_set_playing(false)
 	_update_ships()
+	if tracked != "" and ships[tracked].node.visible:
+		camera.set_target(ships[tracked].node.position)
 	if not _scrubbing:
 		timeline.set_value_no_signal(time)
+	_update_info()
 	time_label.text = "%s / %s" % [_fmt_time(time), _fmt_time(data.duration)]
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_left_click(event)
+		return
 	if not (event is InputEventKey and event.pressed):
+		return
+	if event.keycode == KEY_ESCAPE:
+		_select("")
 		return
 	if event.keycode == KEY_B:
 		boundary_toggle.button_pressed = not boundary_toggle.button_pressed
@@ -266,13 +319,16 @@ func _add_ship(pilot: String) -> void:
 	var icon := _icon()
 	node.add_child(icon)
 
+	var select_icon := _icon()
+	node.add_child(select_icon)
+
 	var label := _label(color)
 	node.add_child(label)
 
 	node.visible = false
 	ships_root.add_child(node)
 	ships[pilot] = {
-		"node": node, "visual": visual, "model_id": 0, "icon": icon, "label": label,
+		"node": node, "visual": visual, "model_id": 0, "icon": icon, "select_icon": select_icon, "label": label,
 		"ship_type": "", "radius": 0.0, "dead": false, "color": color, "tint": color,
 		"death_t": INF, "death_marker": null, "heading": Quaternion.IDENTITY, "heading_t": -INF,
 	}
@@ -445,6 +501,122 @@ func _icon_clearance(node: Node3D) -> float:
 	return _units_per_px(camera.global_position.distance_to(node.global_position)) * ICON_PX * 0.75
 
 
+# --- selection ---------------------------------------------------------------
+
+## Left click selects the ship under the cursor (empty space clears it); a double click also
+## follows it. A press that turns into a camera drag selects nothing.
+func _on_left_click(event: InputEventMouseButton) -> void:
+	if event.pressed:
+		_press_pos = event.position
+		if event.double_click:
+			# The camera jumps to the ship, so the release would miss it: ignore that release.
+			_press_pos = Vector2.INF
+			var pilot := _pick_ship(event.position)
+			if pilot != "":
+				_select(pilot)
+				_follow(pilot)
+		return
+	if event.position.distance_to(_press_pos) <= CLICK_SLOP_PX:
+		_select(_pick_ship(event.position))
+	_press_pos = Vector2.INF
+
+
+## The visible ship drawn nearest `screen_pos` within `PICK_PX` (or its on-screen hull), or "".
+func _pick_ship(screen_pos: Vector2) -> String:
+	var best := ""
+	var best_d := INF
+	for pilot in ships:
+		var node: Node3D = ships[pilot].node
+		if not node.visible or camera.is_position_behind(node.global_position):
+			continue
+		var d := camera.unproject_position(node.global_position).distance_to(screen_pos)
+		var dist := camera.global_position.distance_to(node.global_position)
+		var hull_px: float = ships[pilot].visual.scale.x / _units_per_px(dist)
+		if d <= maxf(PICK_PX, hull_px) and d < best_d:
+			best = pilot
+			best_d = d
+	return best
+
+
+## Selects `pilot` ("" clears): brackets it in space, highlights its roster row and fills the
+## info panel.
+func _select(pilot: String) -> void:
+	selected = pilot
+	for p in ships:
+		var ship: Dictionary = ships[p]
+		var on: bool = p == selected
+		_set_icon(ship.select_icon, _select_texture() if on else null, SELECT_COLOR)
+		if on:
+			ship.select_icon.pixel_size *= SELECT_SCALE
+		ship.label.font_size = 30 if on else 24
+	for p in roster_buttons:
+		_style_roster_button(p)
+	if selected != "" and roster_buttons.has(selected):
+		roster_scroll.ensure_control_visible(roster_buttons[selected])
+	_update_info()
+
+
+## White corner brackets drawn around the selected ship's icon.
+func _select_texture() -> Texture2D:
+	if select_texture:
+		return select_texture
+	const N := 64
+	const ARM := 18
+	const W := 4
+	var img := Image.create(N, N, false, Image.FORMAT_RGBA8)
+	for corner in [Vector2i(0, 0), Vector2i(N - ARM, 0), Vector2i(0, N - W), Vector2i(N - ARM, N - W)]:
+		img.fill_rect(Rect2i(corner, Vector2i(ARM, W)), Color.WHITE)
+	for corner in [Vector2i(0, 0), Vector2i(N - W, 0), Vector2i(0, N - ARM), Vector2i(N - W, N - ARM)]:
+		img.fill_rect(Rect2i(corner, Vector2i(W, ARM)), Color.WHITE)
+	select_texture = ImageTexture.create_from_image(img)
+	return select_texture
+
+
+## Gives the selected pilot's roster row a tinted background.
+func _style_roster_button(pilot: String) -> void:
+	var button: Button = roster_buttons[pilot]
+	if pilot != selected:
+		button.flat = true
+		button.remove_theme_stylebox_override("normal")
+		button.remove_theme_stylebox_override("hover")
+		return
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(ships[pilot].color, 0.25)
+	box.set_corner_radius_all(3)
+	button.flat = false
+	button.add_theme_stylebox_override("normal", box)
+	button.add_theme_stylebox_override("hover", box)
+
+
+## Shows the selected pilot's ship, team, speed and position in the info panel.
+func _update_info() -> void:
+	info_panel.visible = selected != "" and data != null
+	if not info_panel.visible:
+		return
+	var team: int = data.teams.get(selected, MatchData.Team.UNKNOWN)
+	var lines := PackedStringArray()
+	lines.append("%s — %s" % [selected, TEAM_NAMES[team]])
+	var now := data.sample(selected, time)
+	if now.is_empty():
+		lines.append("Not on grid")
+	else:
+		lines.append(now.ship_type)
+		var prev := data.sample(selected, time - 0.5)
+		var next := data.sample(selected, time + 0.5)
+		var a: Dictionary = prev if not prev.is_empty() else now
+		var b: Dictionary = next if not next.is_empty() else now
+		if b.t > a.t:
+			lines.append("Speed: %.0f m/s" % ((b.pos - a.pos).length() / (b.t - a.t)))
+		var d: float = now.pos.distance_to(MatchData.CENTRE_M) * M_TO_UNITS
+		lines.append("From centre: %.1f km (boundary %.1f km)" % [d, BOUNDARY_KM - d])
+	var ship: Dictionary = ships[selected]
+	if time >= ship.death_t:
+		lines.append("DEAD (out of bounds at %s)" % _fmt_time(ship.death_t))
+	lines.append("Following" if tracked == selected else "Double-click to follow")
+	info_label.text = "\n".join(lines)
+	info_label.modulate = TEAM_COLORS[team].lerp(Color.WHITE, 0.5)
+
+
 # --- playback ----------------------------------------------------------------
 
 func _seek(t: float) -> void:
@@ -493,6 +665,7 @@ func _build_environment() -> void:
 	camera.set_script(preload("res://scripts/orbit_camera.gd"))
 	camera.target = Vector3.ONE * CUBE / 2.0
 	add_child(camera)
+	camera.panned.connect(func(): _set_tracked(""))
 
 
 ## Positions of the 8 corner markers, then the centre one.
@@ -622,13 +795,13 @@ func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 
-	var panel := PanelContainer.new()
-	panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	layer.add_child(panel)
+	bottom_panel = PanelContainer.new()
+	bottom_panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	bottom_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	layer.add_child(bottom_panel)
 
 	var box := VBoxContainer.new()
-	panel.add_child(box)
+	bottom_panel.add_child(box)
 
 	var row := HBoxContainer.new()
 	box.add_child(row)
@@ -714,7 +887,16 @@ func _build_ui() -> void:
 	assets_dialog.confirmed.connect(assets.full_download)
 	layer.add_child(assets_dialog)
 
+	info_panel = PanelContainer.new()
+	info_panel.position = Vector2(12, 12)
+	info_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info_panel.visible = false
+	layer.add_child(info_panel)
+	info_label = Label.new()
+	info_panel.add_child(info_label)
+
 	_build_settings(layer)
+	_build_roster(layer)
 
 
 func _build_settings(layer: CanvasLayer) -> void:
@@ -772,6 +954,118 @@ func _build_settings(layer: CanvasLayer) -> void:
 	models_download.text = "Download ship icons"
 	models_download.pressed.connect(assets.full_download)
 	buttons.add_child(models_download)
+
+
+## Right-hand panel listing each team's pilots: click one to follow it, ⇄ to change its team.
+func _build_roster(layer: CanvasLayer) -> void:
+	roster_panel = PanelContainer.new()
+	roster_panel.set_anchors_and_offsets_preset(Control.PRESET_RIGHT_WIDE)
+	roster_panel.offset_left = -ROSTER_WIDTH
+	roster_panel.visible = false
+	layer.add_child(roster_panel)
+	var keep_above_bar := func(): roster_panel.offset_bottom = -bottom_panel.size.y
+	bottom_panel.resized.connect(keep_above_bar)
+	keep_above_bar.call()
+
+	roster_scroll = ScrollContainer.new()
+	roster_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	roster_panel.add_child(roster_scroll)
+	roster_box = VBoxContainer.new()
+	roster_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	roster_scroll.add_child(roster_box)
+
+
+## Rebuilds the roster from the loaded match's teams.
+func _refresh_roster() -> void:
+	for c in roster_box.get_children():
+		roster_box.remove_child(c)
+		c.queue_free()
+	roster_buttons.clear()
+	roster_panel.visible = data != null
+	if data == null:
+		return
+	var pilots := ships.keys()
+	# By ship type, then pilot.
+	var key := func(p: String) -> String: return "%s\n%s" % [data.tracks[p][0].ship_type, p]
+	pilots.sort_custom(func(a, b): return key.call(a).naturalnocasecmp_to(key.call(b)) < 0)
+	for team in [MatchData.Team.BLUE, MatchData.Team.RED, MatchData.Team.UNKNOWN]:
+		var members := pilots.filter(func(p): return data.teams.get(p, MatchData.Team.UNKNOWN) == team)
+		if team == MatchData.Team.UNKNOWN and members.is_empty():
+			continue
+		var color: Color = TEAM_COLORS[team]
+		var header := Label.new()
+		header.text = "%s (%d)" % [TEAM_NAMES[team], members.size()]
+		header.modulate = color
+		roster_box.add_child(header)
+		var other: int = MatchData.Team.BLUE if team != MatchData.Team.BLUE else MatchData.Team.RED
+		for pilot in members:
+			var row := HBoxContainer.new()
+			roster_box.add_child(row)
+			var button := Button.new()
+			button.text = "%s — %s" % [data.tracks[pilot][0].ship_type, _short_name(pilot)]
+			button.toggle_mode = true
+			button.flat = true
+			button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			button.clip_text = true
+			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			button.focus_mode = Control.FOCUS_NONE
+			button.tooltip_text = "Centre the camera on %s" % pilot
+			button.add_theme_color_override("font_color", color)
+			button.set_pressed_no_signal(pilot == tracked)
+			button.pressed.connect(_set_tracked.bind(pilot))
+			row.add_child(button)
+			roster_buttons[pilot] = button
+			_style_roster_button(pilot)
+			var swap := Button.new()
+			swap.text = "⇄"
+			swap.focus_mode = Control.FOCUS_NONE
+			swap.tooltip_text = "Move to %s" % TEAM_NAMES[other]
+			swap.pressed.connect(_swap_team.bind(pilot))
+			row.add_child(swap)
+
+
+## Roster abbreviation of a pilot name: the first word, then initials ("Ackbad Some Name" ->
+## "Ackbad S. N.").
+static func _short_name(pilot: String) -> String:
+	var words := pilot.split(" ", false)
+	if words.is_empty():
+		return pilot
+	var out := words[0]
+	for i in range(1, words.size()):
+		out += " %s." % words[i].left(1)
+	return out
+
+
+## Follows `pilot` with the camera; picking the followed pilot again (or "") frees it.
+func _set_tracked(pilot: String) -> void:
+	_follow("" if pilot == tracked else pilot)
+
+
+## Follows `pilot` with the camera ("" frees it).
+func _follow(pilot: String) -> void:
+	tracked = pilot
+	for p in roster_buttons:
+		roster_buttons[p].set_pressed_no_signal(p == tracked)
+	if tracked != "" and ships[tracked].node.visible:
+		camera.set_target(ships[tracked].node.position)
+
+
+## Moves `pilot` to the other team (unknown pilots go to blue) and recolours it.
+func _swap_team(pilot: String) -> void:
+	var team: int = MatchData.Team.RED if data.teams.get(pilot) == MatchData.Team.BLUE else MatchData.Team.BLUE
+	data.teams[pilot] = team
+	team_overrides[pilot] = team
+	var ship: Dictionary = ships[pilot]
+	ship.color = TEAM_COLORS[team]
+	ship.ship_type = ""  # Forces `_update_ships` to re-tint the visual, icon and label.
+	if ship.death_marker:
+		var was_visible: bool = ship.death_marker.visible
+		ship.death_marker.queue_free()
+		ship.death_marker = _death_marker(pilot, data.deaths[pilot], ship.color)
+		ship.death_marker.visible = was_visible
+	_update_file_label()
+	_refresh_roster()
 
 
 func _on_files_dropped(files: PackedStringArray) -> void:

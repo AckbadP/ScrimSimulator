@@ -1,5 +1,9 @@
 extends Camera3D
-## Orbit camera: left/right drag rotates, wheel zooms, middle drag pans.
+## Orbit camera: left/right drag rotates, wheel zooms, middle drag pans. (Left clicks that
+## don't drag select ships; `main.gd` handles those.)
+
+## Middle-drag pan: the user moved the target by hand.
+signal panned
 
 @export var target := Vector3(50, 50, 50)
 @export var distance := 320.0
@@ -35,6 +39,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			var pan := distance * 0.0015
 			target += (-global_basis.x * event.relative.x + global_basis.y * event.relative.y) * pan
 			_update_transform()
+			panned.emit()
+
+
+## Re-centres the orbit on `p`, keeping distance and angles.
+func set_target(p: Vector3) -> void:
+	target = p
+	_update_transform()
 
 
 func _update_transform() -> void:

@@ -170,6 +170,284 @@ func test_death_marks_ship() -> void:
 	assert_almost(runner.death_marker.position, (C + X * MatchData.BOUNDARY_RADIUS_M) * Main.M_TO_UNITS, 1e-2)
 
 
+# --- roster ----------------------------------------------------------------------
+
+## Team header labels and the pilots of the buttons in roster order, e.g. ["Blue (1)", "blue", ...].
+func _roster(m: Main) -> Array:
+	var out := []
+	for c in m.roster_box.get_children():
+		if c is Label:
+			out.append(c.text)
+		else:
+			out.append(m.roster_buttons.find_key(c.get_child(0)))
+	return out
+
+
+func test_short_name() -> void:
+	assert_eq(Main._short_name("Ackbad"), "Ackbad")
+	assert_eq(Main._short_name("Amarr Citizen 0220922"), "Amarr C. 0.")
+	assert_eq(Main._short_name("  Two  Spaces "), "Two S.")
+
+
+func test_roster_lists_teams() -> void:
+	var m := _main()
+	assert_false(m.roster_panel.visible, "hidden until a match loads")
+	m.load_match(_match_csv())
+	assert_true(m.roster_panel.visible)
+	assert_eq(_roster(m), ["Blue (1)", "blue", "Red (1)", "red", "Unknown (2)", "late", "runner"])
+	assert_eq(m.roster_buttons["blue"].text, "Test Hull — blue")
+
+
+func test_roster_sorts_by_ship_type_and_abbreviates() -> void:
+	var m := _main()
+	m.load_match(write_csv([
+		row(0, "Zed Pilot", "Atron", C), row(1, "Zed Pilot", "Atron", C),
+		row(0, "Amy Pilot", "Rifter", C), row(1, "Amy Pilot", "Rifter", C),
+		row(0, "Bob Pilot", "Atron", C), row(1, "Bob Pilot", "Atron", C),
+	]))
+	assert_eq(_roster(m), ["Blue (0)", "Red (0)", "Unknown (3)", "Bob Pilot", "Zed Pilot", "Amy Pilot"])
+	assert_eq(m.roster_buttons["Bob Pilot"].text, "Atron — Bob P.")
+	assert_eq(m.roster_buttons["Bob Pilot"].tooltip_text, "Centre the camera on Bob Pilot")
+
+
+func test_roster_hides_empty_unknown_group() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._swap_team("late")
+	m._swap_team("runner")
+	assert_eq(_roster(m), ["Blue (3)", "blue", "late", "runner", "Red (1)", "red"])
+
+
+func test_track_centres_camera() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._seek(2.0)
+	m._set_tracked("blue")
+	assert_eq(m.tracked, "blue")
+	assert_true(m.roster_buttons["blue"].button_pressed)
+	m._process(1.0)
+	assert_almost(m.camera.target, m.ships["blue"].node.position)
+	m._process(1.0)
+	assert_almost(m.camera.target, m.ships["blue"].node.position, 1e-4, "keeps following")
+
+	m._set_tracked("blue")
+	assert_eq(m.tracked, "", "picking it again frees the camera")
+	assert_false(m.roster_buttons["blue"].button_pressed)
+
+
+func test_track_holds_target_while_hidden() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._seek(0.0)
+	m._set_tracked("red")
+	m._process(0.0)
+	var target: Vector3 = m.camera.target
+	m._seek(10.0)  # In red's 20 s gap.
+	m._process(0.0)
+	assert_false(m.ships["red"].node.visible)
+	assert_eq(m.camera.target, target)
+
+
+func test_pan_stops_tracking() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._set_tracked("blue")
+	var ev := InputEventMouseMotion.new()
+	ev.relative = Vector2(50, 0)
+	ev.button_mask = MOUSE_BUTTON_MASK_MIDDLE
+	m.camera._unhandled_input(ev)
+	assert_eq(m.tracked, "")
+
+
+func test_new_match_drops_missing_tracked_pilot() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._set_tracked("blue")
+	m.load_match(write_csv([row(0, "solo", "Test Hull", C), row(1, "solo", "Test Hull", C)]))
+	assert_eq(m.tracked, "")
+
+
+func test_swap_team() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._swap_team("blue")
+	assert_eq(m.data.teams["blue"], MatchData.Team.RED)
+	assert_eq(m.ships["blue"].color, Main.TEAM_COLORS[MatchData.Team.RED])
+	assert_eq(_roster(m), ["Blue (0)", "Red (2)", "blue", "red", "Unknown (2)", "late", "runner"])
+	assert_true(m.file_label.text.contains("blue 0 / red 2 / unknown 2"))
+	m._seek(0.0)
+	m._update_ships()
+	assert_eq(m.ships["blue"].tint, Main.TEAM_COLORS[MatchData.Team.RED])
+	assert_eq(m.ships["blue"].label.modulate, Main.TEAM_COLORS[MatchData.Team.RED])
+	m._swap_team("blue")
+	assert_eq(m.data.teams["blue"], MatchData.Team.BLUE)
+
+
+func test_swap_recolours_death_marker() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._swap_team("runner")
+	var label: Label3D = m.ships["runner"].death_marker.get_child(2)
+	assert_eq(label.modulate, Main.TEAM_COLORS[MatchData.Team.BLUE])
+
+
+func test_swap_survives_reload_of_same_match() -> void:
+	var m := _main()
+	var path := _match_csv()
+	m.load_match(path)
+	m._swap_team("blue")
+	m._on_sizes_changed()
+	assert_eq(m.data.teams["blue"], MatchData.Team.RED)
+	m.load_match(write_csv([row(0, "blue", "Test Hull", on_line(0, 0.5))]))
+	assert_true(m.team_overrides.is_empty(), "a different match starts fresh")
+
+
+# --- selection -------------------------------------------------------------------
+
+## A viewer at 2 s with ships placed: blue and runner on grid, red (in its gap) and late not.
+func _select_main() -> Main:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._seek(2.0)
+	m._process(0.0)
+	return m
+
+
+func _screen(m: Main, pilot: String) -> Vector2:
+	return m.camera.unproject_position(m.ships[pilot].node.global_position)
+
+
+func _mouse(m: Main, pos: Vector2, pressed: bool, double := false) -> void:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.position = pos
+	ev.pressed = pressed
+	ev.double_click = double
+	m._unhandled_input(ev)
+
+
+func _click(m: Main, pos: Vector2, double := false) -> void:
+	_mouse(m, pos, true, double)
+	_mouse(m, pos, false)
+
+
+## Somewhere on screen far from every ship.
+func _empty_spot(m: Main) -> Vector2:
+	for p in [Vector2(5, 5), Vector2(1000, 5), Vector2(5, 600)]:
+		if m._pick_ship(p) == "":
+			return p
+	fail("no empty spot")
+	return Vector2.ZERO
+
+
+func test_pick_ship_hits_nearest_and_misses_empty_space() -> void:
+	var m := _select_main()
+	for pilot in ["blue", "runner"]:
+		assert_eq(m._pick_ship(_screen(m, pilot)), pilot)
+		assert_eq(m._pick_ship(_screen(m, pilot) + Vector2(Main.PICK_PX - 2, 0)), pilot, "near miss still hits")
+	assert_eq(m._pick_ship(_empty_spot(m)), "")
+
+
+func test_pick_ignores_hidden_and_behind_camera() -> void:
+	var m := _select_main()
+	assert_false(m.ships["late"].node.visible)
+	assert_ne(m._pick_ship(_screen(m, "late")), "late", "not on grid yet")
+	# Stand just in front of blue, looking straight away from it.
+	var blue: Vector3 = m.ships["blue"].node.global_position
+	m.camera.look_at_from_position(blue + Vector3(0, 0, 1), blue + Vector3(0, 0, 10))
+	assert_true(m.camera.is_position_behind(blue))
+	assert_ne(m._pick_ship(_screen(m, "blue")), "blue", "behind the camera")
+	assert_ne(m._pick_ship(m.get_viewport().get_visible_rect().size / 2.0), "blue")
+
+
+func test_click_selects_and_shows_info() -> void:
+	var m := _select_main()
+	assert_false(m.info_panel.visible)
+	_click(m, _screen(m, "blue"))
+	assert_eq(m.selected, "blue")
+	assert_true(m.info_panel.visible)
+	assert_true(m.info_label.text.contains("blue"))
+	assert_true(m.info_label.text.contains("Test Hull"))
+	assert_true(m.info_label.text.contains("Speed"))
+	assert_true(m.ships["blue"].select_icon.visible)
+	assert_false(m.ships["red"].select_icon.visible)
+	assert_false(m.roster_buttons["blue"].flat, "roster row highlighted")
+	assert_true(m.roster_buttons["red"].flat)
+	assert_eq(m.tracked, "", "a single click doesn't follow")
+
+	_click(m, _screen(m, "runner"))
+	assert_eq(m.selected, "runner")
+	assert_false(m.ships["blue"].select_icon.visible)
+	assert_true(m.roster_buttons["blue"].flat)
+
+
+func test_click_empty_space_deselects() -> void:
+	var m := _select_main()
+	_click(m, _screen(m, "blue"))
+	_click(m, _empty_spot(m))
+	assert_eq(m.selected, "")
+	assert_false(m.info_panel.visible)
+	assert_false(m.ships["blue"].select_icon.visible)
+
+
+func test_escape_deselects() -> void:
+	var m := _select_main()
+	_click(m, _screen(m, "blue"))
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_ESCAPE
+	ev.pressed = true
+	m._unhandled_input(ev)
+	assert_eq(m.selected, "")
+
+
+func test_drag_does_not_select() -> void:
+	var m := _select_main()
+	var pos := _screen(m, "blue")
+	_mouse(m, pos + Vector2(80, 0), true)
+	_mouse(m, pos, false)
+	assert_eq(m.selected, "", "drag ending on a ship")
+	_click(m, pos)
+	_mouse(m, _empty_spot(m), true)
+	_mouse(m, _empty_spot(m) + Vector2(50, 50), false)
+	assert_eq(m.selected, "blue", "drag from empty space keeps the selection")
+
+
+func test_double_click_follows() -> void:
+	var m := _select_main()
+	_click(m, _screen(m, "blue"))
+	_click(m, _screen(m, "blue"), true)
+	assert_eq(m.selected, "blue")
+	assert_eq(m.tracked, "blue")
+	assert_true(m.roster_buttons["blue"].button_pressed)
+	m._process(1.0)
+	assert_almost(m.camera.target, m.ships["blue"].node.position)
+	assert_true(m.info_label.text.contains("Following"))
+
+	_click(m, _screen(m, "blue"), true)
+	assert_eq(m.tracked, "blue", "double-clicking the followed ship keeps following")
+	_click(m, _empty_spot(m), true)
+	assert_eq(m.tracked, "blue", "double-clicking empty space doesn't drop the follow")
+
+
+func test_info_shows_death() -> void:
+	var m := _select_main()
+	_click(m, _screen(m, "runner"))
+	m._seek(10.0)
+	m._process(0.0)
+	assert_true(m.info_label.text.contains("DEAD"))
+
+
+func test_reload_drops_missing_selection() -> void:
+	var m := _select_main()
+	_click(m, _screen(m, "blue"))
+	m.load_match(_match_csv())
+	assert_eq(m.selected, "blue", "same pilots: kept")
+	assert_true(m.ships["blue"].select_icon.visible)
+	m.load_match(write_csv([row(0, "red", "Test Hull", on_line(7, 0.5))]))
+	assert_eq(m.selected, "")
+	assert_false(m.info_panel.visible)
+
+
 func test_boundary_toggle() -> void:
 	var m := _main()
 	assert_true(m.boundary.visible)
