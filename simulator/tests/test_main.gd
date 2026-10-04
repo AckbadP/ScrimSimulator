@@ -833,6 +833,39 @@ func test_ship_menu_rename_pilot() -> void:
 	assert_eq(m.ship_debug_menu.title_label.text, "Blue Leader")
 
 
+func test_ship_menu_damage_breakdown_windows() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._open_ship_debug_menu("blue", Vector2(10, 10))
+	assert_true(m.ship_debug_menu.damage_button.disabled, "no combat logs")
+	var gamelog := CombatLog.new()
+	for hit in [["red", 1.0, 300.0], ["late", 2.0, 100.0], ["blue", 3.0, 50.0]]:
+		gamelog.entries.append({"eve_unix": 1000.0 + hit[1], "t": hit[1], "kind": CombatLog.Kind.DAMAGE,
+			"text": "", "source": hit[0], "target": "blue", "source_ship": "", "target_ship": "",
+			"source_pilot": hit[0], "target_pilot": "blue", "amount": hit[2], "weapon": "Gun", "quality": ""})
+	m.data.combat_logs = [gamelog]
+	m._apply_combat_stats()
+	m._seek(4.0)
+	m._open_ship_debug_menu("blue", Vector2(10, 10))
+	assert_false(m.ship_debug_menu.damage_button.disabled)
+	m.ship_debug_menu.damage_button.pressed.emit()
+	m._open_ship_debug_menu("red", Vector2(10, 10))
+	m.ship_debug_menu.damage_button.pressed.emit()
+	assert_eq(m.breakdown_windows.size(), 2, "one window per press")
+	var w: DamageBreakdown = m.breakdown_windows[0]
+	assert_eq(w.title, "Incoming DPS — blue")
+	assert_eq(w.total_label.text, "Total: 40 DPS")
+	assert_eq(w._cells.map(func(c): return c.text), ["red", "Test Hull", "30", "late", "Test Hull", "10"],
+		"highest first; self-damage dropped")
+	assert_true(m.breakdown_windows[1].empty_label.visible, "nothing on red")
+	w.close_requested.emit()
+	await tree.process_frame
+	assert_eq(m.breakdown_windows.size(), 1, "closed window forgotten")
+	m.load_match(_events_csv())
+	await tree.process_frame
+	assert_eq(m.breakdown_windows.size(), 0, "another match closes them")
+
+
 func test_menu_rename_open_match_keeps_its_edits() -> void:
 	var path := MatchLibrary.add(_match_csv())
 	var m := _main()

@@ -62,6 +62,25 @@ func test_rates() -> void:
 		assert_true(s.has(id), id)
 
 
+func test_damage_in_by_source() -> void:
+	var s := CombatStats.from_logs([_log([
+		_e(K.DAMAGE, "A", "B", 1.0, 100.0),
+		_e(K.DAMAGE, "C", "B", 2.0, 300.0),
+		_e(K.DAMAGE, "A", "B", 12.0, 50.0),
+		_e(K.REMOTE_REP, "D", "B", 3.0, 500.0),
+		_e(K.NEUT, "D", "B", 3.0, 500.0, "Heavy Energy Neutralizer II"),
+	])])
+	var w := CombatStats.RATE_WINDOW_S
+	var rows := s.damage_in_by_source("B", 5.0)
+	assert_eq(rows.map(func(r): return r.pilot), ["C", "A"], "highest first, damage only")
+	assert_almost(rows[0].dps, 300.0 / w)
+	assert_almost(rows[1].dps, 100.0 / w)
+	rows = s.damage_in_by_source("B", 12.5)
+	assert_eq(rows.map(func(r): return r.pilot), ["A"], "C's hit left the window")
+	assert_almost(rows[0].dps, 50.0 / w)
+	assert_eq(s.damage_in_by_source("A", 5.0), [], "no incoming damage")
+
+
 func test_has_without_data() -> void:
 	var s := CombatStats.from_logs([_log([_e(K.DAMAGE, "A", "B", 1.0, 1.0)])])
 	assert_true(s.has("dmg_in"))

@@ -45,15 +45,24 @@ var _series := {}
 var _ewar := {}
 ## Column id -> true when any pilot has data for it.
 var _has := {}
+## Target pilot -> source pilot -> damage { t, sum } (as in `_series`).
+var _dmg_by_source := {}
 
 
 ## Merges `logs` (synced `CombatLog`s) into per-pilot series.
 static func from_logs(logs: Array) -> CombatStats:
 	var stats := CombatStats.new()
 	var rates := {}  # pilot -> rate id -> [[t, amount], …]
+	var hits := {}  # target -> source -> [[t, amount], …]
 	var casts := {}  # [source, target, type, weapon] key -> { source, target, type, weapon, times }
 	for e in merge(logs):
 		_add_rates(rates, e)
+		if e.kind == CombatLog.Kind.DAMAGE and not is_nan(e.amount):
+			if not hits.has(e.target_pilot):
+				hits[e.target_pilot] = {}
+			if not hits[e.target_pilot].has(e.source_pilot):
+				hits[e.target_pilot][e.source_pilot] = []
+			hits[e.target_pilot][e.source_pilot].append([e.t, e.amount])
 		var type := ewar_type(e)
 		if type != "":
 			var key := "%s|%s|%s|%s" % [e.source_pilot, e.target_pilot, type, e.weapon]
@@ -64,15 +73,12 @@ static func from_logs(logs: Array) -> CombatStats:
 	for pilot in rates:
 		stats._series[pilot] = {}
 		for id in rates[pilot]:
-			var points: Array = rates[pilot][id]
-			points.sort_custom(func(a, b): return a[0] < b[0])
-			var t := PackedFloat64Array()
-			var sum := PackedFloat64Array([0.0])
-			for p in points:
-				t.append(p[0])
-				sum.append(sum[-1] + p[1])
-			stats._series[pilot][id] = {"t": t, "sum": sum}
+			stats._series[pilot][id] = _prefix(rates[pilot][id])
 			stats._has[id] = true
+	for target in hits:
+		stats._dmg_by_source[target] = {}
+		for source in hits[target]:
+			stats._dmg_by_source[target][source] = _prefix(hits[target][source])
 	for c in casts.values():
 		var times: Array = c.times
 		times.sort()
@@ -109,6 +115,17 @@ static func merge(logs: Array) -> Array:
 		out.append_array(list)
 	out.sort_custom(func(a, b): return a.t < b.t)
 	return out
+
+
+## `points` ([[t, amount], …]) sorted by time, as { t, sum } (prefix sums, one longer).
+static func _prefix(points: Array) -> Dictionary:
+	points.sort_custom(func(a, b): return a[0] < b[0])
+	var t := PackedFloat64Array()
+	var sum := PackedFloat64Array([0.0])
+	for p in points:
+		t.append(p[0])
+		sum.append(sum[-1] + p[1])
+	return {"t": t, "sum": sum}
 
 
 static func _add_rates(rates: Dictionary, e: Dictionary) -> void:
@@ -196,6 +213,24 @@ func rate(pilot: String, id: String, t: float) -> float:
 	var s: Dictionary = _series.get(pilot, {}).get(id, {})
 	if s.is_empty():
 		return NAN
+	return _window_rate(s, t)
+
+
+## Damage per second on `pilot` from each attacker over the `RATE_WINDOW_S` up to match time `t`:
+## Array of { pilot (the attacker), dps }, highest first; attackers under 0.5 are left out.
+func damage_in_by_source(pilot: String, t: float) -> Array:
+	var out := []
+	var sources: Dictionary = _dmg_by_source.get(pilot, {})
+	for source in sources:
+		var dps := _window_rate(sources[source], t)
+		if dps >= 0.5:
+			out.append({"pilot": source, "dps": dps})
+	out.sort_custom(func(a, b): return a.dps > b.dps)
+	return out
+
+
+## Amount per second in series `s` ({ t, sum }) over the `RATE_WINDOW_S` up to `t`.
+static func _window_rate(s: Dictionary, t: float) -> float:
 	var times: PackedFloat64Array = s.t
 	var hi := times.bsearch(t, false)
 	var lo := times.bsearch(t - RATE_WINDOW_S, false)
