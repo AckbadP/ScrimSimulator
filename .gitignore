@@ -6,6 +6,8 @@
 simulator/.godot/
 simulator/android/
 simulator/export/
+# Temporary viewport size override written by scripts/readme_gifs.sh
+simulator/override.cfg
 
 # Match data (recordings, scene configs, extracted CSVs) — kept local, never committed
 resouces/matches/
