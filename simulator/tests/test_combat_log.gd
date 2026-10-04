@@ -252,6 +252,26 @@ func test_sync() -> void:
 	assert_almost(d.eve_unix_at(4.0), neut.eve_unix)
 
 
+func test_same_event_in_several_logs_counts_once() -> void:
+	# One scram from Ackbad to Rarai, as each of the scrammer, the target and a bystander logs it.
+	var d := _match()
+	var lines := {
+		"Ackbad Pappotte": "Warp scramble attempt from you to Ashimmu [PS] [Rarai Tarai] -",
+		"Rarai Tarai": "Warp scramble attempt from Deimos [PS] [Ackbad Pappotte] - to you!",
+		"Someone Else": "Warp scramble attempt from Deimos [PS] [Ackbad Pappotte] - to Ashimmu [PS] [Rarai Tarai] -",
+	}
+	var logs := []
+	for listener in lines:
+		var gamelog := CombatLog.load_file(_write_log(["[ 2026.10.03 14:03:20 ] (combat) " + lines[listener]], listener))
+		gamelog.sync(d)
+		var e: Dictionary = gamelog.entries[0]
+		assert_eq([e.source_pilot, e.target_pilot], ["Ackbad Pappot", "Rarai Tarai"], listener)
+		logs.append(gamelog)
+	assert_eq(CombatStats.merge(logs).size(), 1)
+	var stats := CombatStats.from_logs(logs)
+	assert_eq(stats.ewar_at("Rarai Tarai", false, 4.5).scram, [{"pilot": "Ackbad Pappot", "cycles": 1}])
+
+
 func test_sync_override_and_unknown_listener() -> void:
 	var d := _match()
 	var gamelog := CombatLog.load_file(_write_log(["[ 2026.10.03 14:03:20 ] (combat) " + DAMAGE_OUT], "Someone Else"))
