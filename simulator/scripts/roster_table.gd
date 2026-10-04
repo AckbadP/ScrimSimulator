@@ -10,6 +10,8 @@ signal row_pressed(pilot: String)
 signal swap_pressed(pilot: String)
 ## A pilot row was right-clicked.
 signal row_context_pressed(pilot: String)
+## A team label added with a `key` was double-clicked.
+signal group_activated(key: int)
 ## Column widths, order or visibility changed.
 signal layout_changed
 
@@ -202,12 +204,20 @@ func clear() -> void:
 	rows.clear()
 
 
-## A full-width, centred team label.
-func add_group(text: String, color: Color) -> Label:
+## A full-width, centred team label; with a `key` (>= 0), double-clicking it emits
+## `group_activated(key)`.
+func add_group(text: String, color: Color, key := -1, tooltip := "") -> Label:
 	var label := Label.new()
 	label.text = text
 	label.modulate = color
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if key >= 0:
+		label.mouse_filter = Control.MOUSE_FILTER_STOP
+		label.tooltip_text = tooltip
+		label.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton and event.double_click and event.button_index == MOUSE_BUTTON_LEFT:
+				group_activated.emit(key)
+				label.accept_event())
 	body.add_child(label)
 	return label
 

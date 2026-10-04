@@ -44,7 +44,19 @@ time a match needs it. The gallery's GLBs are Draco-compressed, which Godot can'
 `glb-undraco` (`crates/glb-undraco`) rewrites each one when it is downloaded. If the helper isn't
 found, ships fall back to spheres.
 
-You can also load a CSV with the **Open CSV…** button, or by dropping the file onto the window.
+Started without `--csv`, the simulator opens on a main menu listing the matches you have added:
+pick one to watch it, **Add match…** to add a new `*.positions.csv`, **Rename…** to retitle one, or
+**Remove** to drop one.
+Added matches are copied into the simulator's library (`user://matches`, i.e.
+`~/.local/share/godot/app_userdata/simulator/matches` on Linux), so they stay available after the
+original file moves. Dropping a CSV onto the window also adds it and opens it, and the **Menu**
+button returns to the list. `--csv` opens a file directly without adding it.
+
+Team swaps (⇄ in the roster) and team names (double-click a team's heading in the roster) are
+saved per match, in a `.json` file beside its library copy, so they come back next session; a
+`--csv` match keeps them only until you quit. Pilots are renamed from their right-click menu
+(**Rename pilot…**); a pilot's new name is used in every match, and an empty name restores the
+CSV one.
 Resizing the window shows more of the arena; the UI size is set by **Interface scale** in Settings.
 Matches open paused; press Start (or Space/Play) to begin. Controls: Space plays/pauses, ←/→ pause and step one tick (1 s), the slider scrubs. Left drag orbits the camera,
 the wheel zooms, and right drag pans. Click a ship to select it (its details show top left; Esc

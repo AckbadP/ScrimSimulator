@@ -8,12 +8,15 @@ const C := MatchData.CENTRE_M
 const X := Vector3.RIGHT
 
 var _saved_path: String
+var _saved_library: String
 
 
 func before_each() -> void:
 	# Keep the real settings untouched and skip the SDE update check (network).
 	_saved_path = Settings.path
 	Settings.path = temp_dir().path_join("settings.cfg")
+	_saved_library = MatchLibrary.dir
+	MatchLibrary.dir = temp_dir().path_join("matches")
 	Settings._cfg = null
 	Settings.set_value("sde/auto_update", false)
 	Settings.set_value("display/ship_models", false)
@@ -23,6 +26,7 @@ func after_each() -> void:
 	tree.root.content_scale_factor = 1.0
 	Settings.path = _saved_path
 	Settings._cfg = null
+	MatchLibrary.dir = _saved_library
 
 
 func _main() -> Main:
@@ -79,6 +83,86 @@ func test_starts_empty() -> void:
 	var m := _main()
 	assert_null(m.data)
 	assert_true(m.file_label.text.begins_with("No match loaded"))
+
+
+func test_starts_on_menu() -> void:
+	var m := _main()
+	assert_true(m.menu.visible)
+	assert_true(m.menu.empty_label.visible)
+	assert_false(m.menu.resume_button.visible, "nothing to go back to")
+
+
+func test_menu_lists_library_and_opens_match() -> void:
+	var path := MatchLibrary.add(_match_csv())
+	var m := _main()
+	assert_eq(m.menu.list.item_count, 1)
+	assert_false(m.menu.empty_label.visible)
+	m.menu.open_button.pressed.emit()
+	assert_false(m.menu.visible)
+	assert_eq(m.match_path, path)
+	assert_eq(m.ships.size(), 4)
+
+
+func test_menu_add_copies_and_opens() -> void:
+	var m := _main()
+	var src := _match_csv()
+	m.menu.add_dialog.file_selected.emit(src)
+	assert_false(m.menu.visible)
+	assert_eq(m.match_path, MatchLibrary.dir.path_join("match.positions.csv"))
+	assert_eq(MatchLibrary.list().size(), 1)
+
+
+func test_menu_bad_match_shows_error() -> void:
+	var m := _main()
+	m.menu.add_dialog.file_selected.emit(write_csv([], "not,a,positions,file"))
+	assert_true(m.menu.visible)
+	assert_null(m.data)
+	assert_true(m.menu.error_label.visible)
+	assert_true(m.menu.error_label.text.begins_with("Failed to load"))
+
+
+func test_menu_button_pauses_and_resumes() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._toggle_play()
+	m._show_menu()
+	assert_true(m.menu.visible)
+	assert_false(m.playing)
+	assert_true(m.menu.resume_button.visible)
+	m.menu.resume_button.pressed.emit()
+	assert_false(m.menu.visible)
+	assert_not_null(m.data)
+
+
+func test_menu_blocks_playback_keys() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._show_menu()
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_SPACE
+	ev.pressed = true
+	m._input(ev)
+	assert_false(m.playing)
+	ev.keycode = KEY_RIGHT
+	m._input(ev)
+	assert_eq(m.time, 0.0)
+
+
+func test_drop_adds_to_library_and_opens() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._on_files_dropped(PackedStringArray(["/tmp/notes.txt", _match_csv()]))
+	assert_false(m.menu.visible)
+	assert_eq(m.match_path.get_base_dir(), MatchLibrary.dir)
+	assert_eq(MatchLibrary.list().size(), 1)
+
+
+func test_menu_remove_deletes_from_library() -> void:
+	MatchLibrary.add(_match_csv())
+	var m := _main()
+	m.menu.remove_dialog.confirmed.emit()
+	assert_eq(m.menu.list.item_count, 0)
+	assert_eq(MatchLibrary.list(), [])
 
 
 func test_load_bad_file() -> void:
@@ -383,7 +467,7 @@ func test_roster_sorts_by_ship_type_and_abbreviates() -> void:
 	assert_eq(_roster(m), ["Blue (0)", "Red (0)", "Unknown (3)", "Bob Pilot", "Zed Pilot", "Amy Pilot"])
 	assert_eq(m.roster_table.cell_text("Bob Pilot", "ship"), "Atron")
 	assert_eq(m.roster_table.cell_text("Bob Pilot", "pilot"), "Bob P.")
-	assert_eq(m.roster_buttons["Bob Pilot"].tooltip_text, "Centre the camera on Bob Pilot")
+	assert_eq(m.roster_buttons["Bob Pilot"].tooltip_text, "Centre the camera on Bob Pilot (right-click to rename or debug)")
 
 
 func test_roster_hides_empty_unknown_group() -> void:
@@ -502,6 +586,102 @@ func test_swap_survives_reload_of_same_match() -> void:
 	assert_eq(m.data.teams["blue"], MatchData.Team.RED)
 	m.load_match(write_csv([row(0, "blue", "Test Hull", on_line(0, 0.5))]))
 	assert_true(m.team_overrides.is_empty(), "a different match starts fresh")
+
+
+func test_swap_persists_for_library_match() -> void:
+	var path := MatchLibrary.add(_match_csv())
+	var m := _main()
+	m.load_match(path)
+	m._swap_team("blue")
+	var m2 := _main()
+	m2.load_match(path)
+	assert_eq(m2.data.teams["blue"], MatchData.Team.RED)
+	assert_eq(_roster(m2), ["Blue (0)", "Red (2)", "blue", "red", "Unknown (2)", "late", "runner"])
+
+
+func test_rename_team_shows_and_persists() -> void:
+	var path := MatchLibrary.add(_match_csv())
+	var m := _main()
+	m.load_match(path)
+	m._rename_team(MatchData.Team.RED, " Them ")
+	assert_eq(_roster(m)[2], "Them (1)")
+	assert_true(m.file_label.text.contains("blue 1 / Them 1 / unknown 2"))
+	assert_eq(m.roster_table.rows["blue"].button.get_parent().get_child(1).tooltip_text, "Move to Them")
+	var m2 := _main()
+	m2.load_match(path)
+	assert_eq(_roster(m2)[2], "Them (1)")
+	m2._rename_team(MatchData.Team.RED, "")
+	assert_eq(_roster(m2)[2], "Red (1)", "empty restores the default")
+	m2.load_match(MatchLibrary.add(write_csv([row(0, "blue", "Test Hull", on_line(0, 0.5))])))
+	assert_true(m2.team_names.is_empty(), "another match has its own names")
+
+
+func test_double_click_team_asks_rename() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m.roster_table.group_activated.emit(MatchData.Team.BLUE)
+	assert_eq(m.rename_dialog.line_edit.text, "Blue")
+	m.rename_dialog.line_edit.text = "Us"
+	m.rename_dialog.confirmed.emit()
+	assert_eq(_roster(m)[0], "Us (1)")
+
+
+func test_rename_pilot_everywhere_and_persists() -> void:
+	var m := _main()
+	m.load_match(_events_csv())
+	m._select("hopper")
+	m._seek(7.0)
+	m._rename_pilot("hopper", "Hoppy")
+	assert_eq(m.roster_table.cell_text("hopper", "pilot"), "Hoppy")
+	assert_true(m.ships["hopper"].label.text.begins_with("Hoppy\n"))
+	assert_true(m.event_strip.marks[0].text.contains(" Hoppy — "))
+	assert_true(m.info_label.text.begins_with("Hoppy — "))
+	var m2 := _main()
+	m2.load_match(write_csv([row(0, "hopper", "Test Hull", C), row(1, "hopper", "Test Hull", C)]))
+	assert_eq(m2.roster_table.cell_text("hopper", "pilot"), "Hoppy", "alias applies to every match")
+	m2._rename_pilot("hopper", "  ")
+	assert_eq(m2.roster_table.cell_text("hopper", "pilot"), "hopper")
+	assert_eq(Settings.get_value("names/pilots"), {})
+
+
+func test_ship_menu_rename_pilot() -> void:
+	var m := _main()
+	m.load_match(_match_csv())
+	m._open_ship_debug_menu("blue", Vector2(10, 10))
+	m.ship_debug_menu.rename_button.pressed.emit()
+	assert_eq(m.rename_dialog.line_edit.text, "blue")
+	m.rename_dialog.line_edit.text = "Blue Leader"
+	m.rename_dialog.confirmed.emit()
+	assert_eq(m.roster_table.cell_text("blue", "pilot"), "Blue Leader")
+	assert_eq(m.ship_debug_menu.title_label.text, "Blue Leader")
+
+
+func test_menu_rename_open_match_keeps_its_edits() -> void:
+	var path := MatchLibrary.add(_match_csv())
+	var m := _main()
+	m.load_match(path)
+	m._swap_team("blue")
+	m._show_menu()
+	m.menu.rename_selected("Grand final")
+	var renamed := MatchLibrary.dir.path_join("Grand final.positions.csv")
+	assert_eq(m.match_path, renamed)
+	assert_eq(m.menu.selected_path(), renamed)
+	assert_true(m.file_label.text.begins_with("Grand final.positions.csv"))
+	m._on_sizes_changed()
+	assert_eq(m.data.teams["blue"], MatchData.Team.RED, "swap survives the rename")
+
+
+func test_menu_rename_to_taken_name_shows_error() -> void:
+	MatchLibrary.add(write_csv([row(0, "a", "Test Hull", C)]))
+	var src := _match_csv()
+	var other := temp_dir().path_join("other.csv")
+	DirAccess.copy_absolute(src, other)
+	MatchLibrary.add(other)
+	var m := _main()
+	m.menu.list.select(m.menu.entries.map(func(e): return e.name).find("other"))
+	m.menu.rename_selected("match")
+	assert_true(m.menu.error_label.visible)
+	assert_eq(MatchLibrary.list().size(), 2)
 
 
 # --- selection -------------------------------------------------------------------

@@ -1,7 +1,8 @@
 extends Node3D
 ## Replays a `scrim-positions` CSV: one hull model (or sphere) per pilot moving through the
 ## observers' 100 km cube.
-## Load a CSV with `godot --path simulator -- --csv <file>`, the Open button, or drag-and-drop.
+## Starts on the `MainMenu` (matches in the `MatchLibrary`); `godot --path simulator -- --csv <file>`
+## opens a CSV directly instead. Dropping a CSV on the window adds it to the library and opens it.
 
 ## 1 scene unit = 1 km.
 const M_TO_UNITS := 0.001
@@ -83,8 +84,14 @@ var speed := 1.0
 var tracked := ""
 ## Pilot picked by clicking it in space ("" = none); shown in the info panel.
 var selected := ""
-## pilot -> Team picked with the roster's swap button; kept when the same match reloads.
+## pilot -> Team picked with the roster's swap button; kept when the same match reloads, and
+## saved with library matches (`MatchLibrary.save_meta`).
 var team_overrides := {}
+## Team -> name given to it in this match (Blue/Red only; default `TEAM_NAMES`), saved like
+## `team_overrides`.
+var team_names := {}
+## CSV pilot name -> display name, for every match (setting `names/pilots`).
+var pilot_names: Dictionary = Settings.get_value("names/pilots").duplicate()
 ## pilot -> { vector: bool, spheres: [{ radius_km, color }] } from the debug menus; kept when the
 ## same match reloads.
 var debug := {}
@@ -117,7 +124,7 @@ var beacon_ranges_corner: Node3D
 var beacon_ranges_centre: Node3D
 var vector_material: StandardMaterial3D
 
-var open_dialog: FileDialog
+var menu: MainMenu
 var play_button: Button
 ## Big centred button shown over a freshly opened (paused) match; gone once playback first starts.
 var start_button: Button
@@ -147,6 +154,9 @@ var select_texture: Texture2D
 var ship_debug_menu: DebugMenu
 var all_debug_menu: DebugMenu
 var debug_pilot := ""
+## Pilot and team renaming; `_rename_target` applies the submitted name.
+var rename_dialog: RenameDialog
+var _rename_target := func(_text: String): pass
 ## pilot -> its toggle Button in the roster.
 var roster_buttons := {}
 var _scrubbing := false
@@ -194,6 +204,8 @@ func _ready() -> void:
 	var i := args.find("--csv")
 	if i >= 0 and i + 1 < args.size():
 		load_match(_resolve_cli_path(args[i + 1]))
+	else:
+		_show_menu()
 
 
 ## `--path` makes Godot chdir into the project, so a relative CLI path is resolved against the
@@ -207,15 +219,19 @@ static func _resolve_cli_path(path: String) -> String:
 	return pwd.path_join(path).simplify_path()
 
 
-func load_match(path: String) -> void:
+## Opens `path`, hiding the menu; false (and nothing changes) if it can't be read.
+func load_match(path: String) -> bool:
 	var d := MatchData.load_csv(path, sizes.radii(), _move_threshold_m())
 	if d == null:
 		file_label.text = "Failed to load %s" % path.get_file()
-		return
+		return false
+	menu.visible = false
 	data = d
 	data.smooth = smooth_on
 	if path != match_path:
-		team_overrides.clear()
+		var meta := MatchLibrary.load_meta(path) if MatchLibrary.contains(path) else {}
+		team_overrides = meta.get("teams", {})
+		team_names = meta.get("team_names", {})
 		debug.clear()
 		start_button.visible = true
 	for pilot in team_overrides:
@@ -244,15 +260,56 @@ func load_match(path: String) -> void:
 		print("  %s: out of bounds at %s" % [pilot, _fmt_time(data.deaths[pilot].t)])
 	_seek(0.0)
 	_set_playing(not start_button.visible)
+	return true
+
+
+## Pauses and covers the viewer with the main menu.
+func _show_menu() -> void:
+	_set_playing(false)
+	menu.show_error("")
+	menu.refresh()
+	menu.resume_button.visible = data != null
+	menu.visible = true
+
+
+func _on_menu_match_chosen(path: String) -> void:
+	if not load_match(path):
+		menu.show_error("Failed to load %s — is it a scrim-positions CSV?" % path.get_file())
+
+
+## The open match was renamed in the library: follow its file.
+func _on_menu_match_renamed(old_path: String, new_path: String) -> void:
+	if old_path == match_path:
+		match_path = new_path
+		_update_file_label()
+
+
+## Saves this match's team swaps and names, if it is in the library.
+func _save_meta() -> void:
+	if MatchLibrary.contains(match_path):
+		MatchLibrary.save_meta(match_path, {"teams": team_overrides, "team_names": team_names})
+
+
+## `pilot`'s display name: its alias (see `pilot_names`) or its CSV name.
+func _pilot_name(pilot: String) -> String:
+	return pilot_names.get(pilot, pilot)
+
+
+## `team`'s display name in this match.
+func _team_name(team: int) -> String:
+	return team_names.get(team, TEAM_NAMES[team])
 
 
 func _update_file_label() -> void:
+	if data == null:
+		return
 	var counts := {MatchData.Team.BLUE: 0, MatchData.Team.RED: 0, MatchData.Team.UNKNOWN: 0}
 	for pilot in data.teams:
 		counts[data.teams[pilot]] += 1
-	file_label.text = "%s — %d pilots (blue %d / red %d / unknown %d), %d out of bounds" % [
+	file_label.text = "%s — %d pilots (%s %d / %s %d / unknown %d), %d out of bounds" % [
 		match_path.get_file(), ships.size(),
-		counts[MatchData.Team.BLUE], counts[MatchData.Team.RED], counts[MatchData.Team.UNKNOWN],
+		team_names.get(MatchData.Team.BLUE, "blue"), counts[MatchData.Team.BLUE],
+		team_names.get(MatchData.Team.RED, "red"), counts[MatchData.Team.RED], counts[MatchData.Team.UNKNOWN],
 		data.deaths.size(),
 	]
 
@@ -263,7 +320,9 @@ func _on_sizes_changed() -> void:
 		return
 	var t := time
 	var was_playing := playing
+	var in_menu: bool = menu.visible
 	load_match(match_path)
+	menu.visible = in_menu
 	_seek(t)
 	_set_playing(was_playing)
 
@@ -369,6 +428,8 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if menu.visible:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_on_left_click(event)
 		return
@@ -394,7 +455,7 @@ func _unhandled_input(event: InputEvent) -> void:
 ## Playback keys are taken here, before the GUI, so a focused button or slider can't swallow
 ## Space or the arrows; only a focused text field keeps them.
 func _input(event: InputEvent) -> void:
-	if data == null or not (event is InputEventKey and event.pressed):
+	if data == null or menu.visible or not (event is InputEventKey and event.pressed):
 		return
 	if get_viewport().gui_get_focus_owner() is LineEdit:
 		return
@@ -546,7 +607,7 @@ func _death_marker(pilot: String, death: Dictionary, color: Color) -> Node3D:
 func _build_events() -> void:
 	var marks := []
 	for e in data.events:
-		marks.append({"t": e.t, "color": EVENT_COLORS[e.kind], "text": _event_text(e)})
+		marks.append({"t": e.t, "color": EVENT_COLORS[e.kind], "text": _event_text(e, _pilot_name(e.pilot))})
 	event_strip.set_marks(marks, data.duration)
 	mjd_trails.clear()
 	for e in data.events:
@@ -554,12 +615,12 @@ func _build_events() -> void:
 			mjd_trails.append({"t": e.t, "node": _mjd_trail(e)})
 
 
-## "03:42 Pilot — Podded (Venture)".
-static func _event_text(e: Dictionary) -> String:
+## "03:42 Pilot — Podded (Venture)", with the pilot shown as `pilot_name`.
+static func _event_text(e: Dictionary, pilot_name: String) -> String:
 	var what: String = EVENT_NAMES[e.kind]
 	if e.kind == MatchData.Event.MJD:
 		what += " %.0f km" % (e.pos.distance_to(e.to_pos) * M_TO_UNITS)
-	return "%s %s — %s (%s)" % [_fmt_time(e.t), e.pilot, what, e.ship_type]
+	return "%s %s — %s (%s)" % [_fmt_time(e.t), pilot_name, what, e.ship_type]
 
 
 ## A line from where a micro jump took off to where it landed; hidden until shown by time.
@@ -624,7 +685,7 @@ func _update_ships() -> void:
 			ship.ship_type = s.ship_type
 			ship.radius = data.radius_m(s.ship_type) * M_TO_UNITS
 			ship.dead = dead
-			ship.label.text = "%s\n%s%s" % [pilot, s.ship_type, "\nDEAD (out of bounds)" if dead else ""]
+			ship.label.text = "%s\n%s%s" % [_pilot_name(pilot), s.ship_type, "\nDEAD (out of bounds)" if dead else ""]
 			var pod: bool = s.ship_type == "Capsule"
 			var color: Color = ship.color.darkened(0.5) if pod else ship.color
 			if dead:
@@ -814,7 +875,7 @@ func _update_info() -> void:
 		return
 	var team: int = data.teams.get(selected, MatchData.Team.UNKNOWN)
 	var lines := PackedStringArray()
-	lines.append("%s — %s" % [selected, TEAM_NAMES[team]])
+	lines.append("%s — %s" % [_pilot_name(selected), _team_name(team)])
 	var now := data.sample(selected, time)
 	if now.is_empty():
 		lines.append("Not on grid")
@@ -928,7 +989,7 @@ func _open_ship_debug_menu(pilot: String, at: Vector2) -> void:
 
 func _refresh_ship_debug_menu() -> void:
 	var state := _debug(debug_pilot)
-	ship_debug_menu.show_state(debug_pilot, state.vector, state.spheres)
+	ship_debug_menu.show_state(_pilot_name(debug_pilot), state.vector, state.spheres)
 
 
 func _open_all_debug_menu() -> void:
@@ -952,6 +1013,7 @@ func _build_debug_menus(layer: CanvasLayer) -> void:
 	ship_debug_menu.vector_toggled.connect(func(on): for_ship.call(func(): _set_vector(debug_pilot, on)))
 	ship_debug_menu.sphere_added.connect(func(r, c): for_ship.call(func(): _add_sphere(debug_pilot, r, c)))
 	ship_debug_menu.sphere_removed.connect(func(i): for_ship.call(func(): _remove_sphere(debug_pilot, i)))
+	ship_debug_menu.rename_requested.connect(func(): _ask_rename_pilot(debug_pilot))
 
 	all_debug_menu = DebugMenu.new(true)
 	all_debug_menu.seconds_spin.set_value_no_signal(vector_seconds)
@@ -1189,10 +1251,11 @@ func _build_ui() -> void:
 	var row := HBoxContainer.new()
 	box.add_child(row)
 
-	var open_button := Button.new()
-	open_button.text = "Open CSV…"
-	open_button.pressed.connect(func(): open_dialog.popup_centered_ratio(0.6))
-	row.add_child(open_button)
+	var menu_button := Button.new()
+	menu_button.text = "Menu"
+	menu_button.tooltip_text = "Back to the match list"
+	menu_button.pressed.connect(_show_menu)
+	row.add_child(menu_button)
 
 	play_button = Button.new()
 	play_button.text = "Play"
@@ -1235,7 +1298,7 @@ func _build_ui() -> void:
 	row.add_child(sde_label)
 
 	file_label = Label.new()
-	file_label.text = "No match loaded — open or drop a *.positions.csv"
+	file_label.text = "No match loaded — pick one from the Menu or drop a *.positions.csv"
 	file_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	file_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(file_label)
@@ -1264,14 +1327,6 @@ func _build_ui() -> void:
 	start_button.pressed.connect(_set_playing.bind(true))
 	layer.add_child(start_button)
 
-	open_dialog = FileDialog.new()
-	open_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	open_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	open_dialog.filters = PackedStringArray(["*.csv ; CSV files"])
-	open_dialog.use_native_dialog = true
-	open_dialog.file_selected.connect(load_match)
-	layer.add_child(open_dialog)
-
 	download_dialog = ConfirmationDialog.new()
 	download_dialog.title = "EVE Static Data Export"
 	download_dialog.ok_button_text = "Download"
@@ -1297,6 +1352,21 @@ func _build_ui() -> void:
 	_build_settings(layer)
 	_build_roster(layer)
 	_build_debug_menus(layer)
+
+	rename_dialog = RenameDialog.new()
+	rename_dialog.submitted.connect(func(text): _rename_target.call(text))
+	layer.add_child(rename_dialog)
+
+	# Above every other control, so the menu hides the bar, roster and start button.
+	var menu_layer := CanvasLayer.new()
+	menu_layer.layer = 10
+	add_child(menu_layer)
+	menu = MainMenu.new()
+	menu.visible = false
+	menu.match_chosen.connect(_on_menu_match_chosen)
+	menu.resumed.connect(func(): menu.visible = false)
+	menu.match_renamed.connect(_on_menu_match_renamed)
+	menu_layer.add_child(menu)
 
 
 func _build_settings(layer: CanvasLayer) -> void:
@@ -1414,6 +1484,7 @@ func _build_roster(layer: CanvasLayer) -> void:
 	roster_table.swap_pressed.connect(_swap_team)
 	roster_table.row_context_pressed.connect(func(pilot):
 		_open_ship_debug_menu(pilot, get_viewport().get_mouse_position()))
+	roster_table.group_activated.connect(_ask_rename_team)
 	roster_table.layout_changed.connect(_fit_roster)
 	roster_panel.add_child(roster_table)
 	_fit_roster()
@@ -1437,23 +1508,25 @@ func _refresh_roster() -> void:
 		return
 	var pilots := ships.keys()
 	# By ship type, then pilot.
-	var key := func(p: String) -> String: return "%s\n%s" % [data.tracks[p][0].ship_type, p]
+	var key := func(p: String) -> String: return "%s\n%s" % [data.tracks[p][0].ship_type, _pilot_name(p)]
 	pilots.sort_custom(func(a, b): return key.call(a).naturalnocasecmp_to(key.call(b)) < 0)
 	for team in [MatchData.Team.BLUE, MatchData.Team.RED, MatchData.Team.UNKNOWN]:
 		var members := pilots.filter(func(p): return data.teams.get(p, MatchData.Team.UNKNOWN) == team)
 		if team == MatchData.Team.UNKNOWN and members.is_empty():
 			continue
 		var color: Color = TEAM_COLORS[team]
-		roster_table.add_group("%s (%d)" % [TEAM_NAMES[team], members.size()], color)
+		var renamable: bool = team != MatchData.Team.UNKNOWN
+		roster_table.add_group("%s (%d)" % [_team_name(team), members.size()], color,
+				team if renamable else -1, "Double-click to rename" if renamable else "")
 		var other: int = MatchData.Team.BLUE if team != MatchData.Team.BLUE else MatchData.Team.RED
 		for pilot in members:
-			var button := roster_table.add_row(pilot, color, "Move to %s" % TEAM_NAMES[other])
-			button.tooltip_text = "Centre the camera on %s" % pilot
+			var button := roster_table.add_row(pilot, color, "Move to %s" % _team_name(other))
+			button.tooltip_text = "Centre the camera on %s (right-click to rename or debug)" % _pilot_name(pilot)
 			button.set_pressed_no_signal(pilot == tracked)
 			roster_buttons[pilot] = button
 			_style_roster_button(pilot)
 			roster_table.set_cell(pilot, "ship", data.tracks[pilot][0].ship_type)
-			roster_table.set_cell(pilot, "pilot", _short_name(pilot))
+			roster_table.set_cell(pilot, "pilot", pilot_names.get(pilot, _short_name(pilot)))
 	_update_roster_cells()
 
 
@@ -1513,12 +1586,58 @@ func _swap_team(pilot: String) -> void:
 		ship.death_marker.queue_free()
 		ship.death_marker = _death_marker(pilot, data.deaths[pilot], ship.color)
 		ship.death_marker.visible = was_visible
+	_save_meta()
 	_update_file_label()
 	_refresh_roster()
 
 
+func _ask_rename_pilot(pilot: String) -> void:
+	rename_dialog.ask("Rename pilot", _pilot_name(pilot), pilot)
+	_rename_target = func(text): _rename_pilot(pilot, text)
+
+
+func _ask_rename_team(team: int) -> void:
+	rename_dialog.ask("Rename team", _team_name(team), TEAM_NAMES[team])
+	_rename_target = func(text): _rename_team(team, text)
+
+
+## Shows `pilot` as `new_name` in every match; empty (or its CSV name) restores the CSV name.
+func _rename_pilot(pilot: String, new_name: String) -> void:
+	new_name = new_name.strip_edges()
+	if new_name == "" or new_name == pilot:
+		pilot_names.erase(pilot)
+	else:
+		pilot_names[pilot] = new_name
+	Settings.set_value("names/pilots", pilot_names.duplicate())
+	if data == null:
+		return
+	if ships.has(pilot):
+		ships[pilot].ship_type = ""  # Forces `_update_ships` to redo the label.
+		_update_ships()
+	_build_events()
+	_refresh_roster()
+	_update_info()
+	if debug_pilot == pilot:
+		_refresh_ship_debug_menu()
+
+
+## Names `team` (Blue or Red) in this match; empty restores the default.
+func _rename_team(team: int, new_name: String) -> void:
+	new_name = new_name.strip_edges()
+	if new_name == "" or new_name == TEAM_NAMES[team]:
+		team_names.erase(team)
+	else:
+		team_names[team] = new_name
+	_save_meta()
+	_update_file_label()
+	_refresh_roster()
+	_update_info()
+
+
+## A dropped CSV joins the library and opens (from the menu or mid-match).
 func _on_files_dropped(files: PackedStringArray) -> void:
 	for f in files:
 		if f.get_extension().to_lower() == "csv":
-			load_match(f)
+			_show_menu()
+			menu.add_file(f)
 			return

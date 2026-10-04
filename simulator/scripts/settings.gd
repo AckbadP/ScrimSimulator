@@ -15,6 +15,8 @@ const DEFAULTS := {
 	"match/jitter_threshold_m": 500.0,
 	# Roster column layout (see `RosterTable`); empty = default columns.
 	"roster/columns": [],
+	# CSV pilot name -> display name, applied in every match.
+	"names/pilots": {},
 }
 
 static var _cfg: ConfigFile

@@ -35,3 +35,4 @@
 - spacebar to pause and unpause. arrow keys to advance one tick at a time
 - maim menu where user can select from already uploaded matches. Match settings should persist between sessions (team assignments, team re-names, display settings)
 - menu to mosify what is displayed over a ship (selectable name, type, dist, speed)
+- add some basic .gifs for the README
