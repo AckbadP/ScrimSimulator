@@ -4,16 +4,16 @@
 Ship types become their closest mining-hull equivalent (capsules stay capsules) and
 each pilot becomes "<Faction> Citizen <7 digits>". The seed keeps output reproducible.
 
-    scripts/anonymize.py resouces/matches/out/match_03.positions.csv resouces/demo/match_03.positions.csv
+    scripts/anonymize.py resouces/matches/out/match_01.positions.csv resouces/demo/demo.positions.csv
 
 With --gamelog IN OUT, gamelog IN is cut down to its combat lines during the match and written
 to OUT with the same pilot names (log names are matched to the CSV's overview-OCR names the way
 the simulator's CombatLog.resolve_pilot does; anyone else gets a fresh name), ships mapped as
 above and corp tickers replaced:
 
-    scripts/anonymize.py resouces/matches/out/match_03.positions.csv resouces/demo/match_03.positions.csv \
-        --gamelog resouces/matches/gamelogs/20261003_124532_<character id>.txt \
-        resouces/demo/match_03.positions.logs/20261003_124532.txt
+    scripts/anonymize.py resouces/matches/out/match_01.positions.csv resouces/demo/demo.positions.csv \
+        --gamelog resouces/matches/gamelogs/20261006_005348_<character id>.txt \
+        resouces/demo/demo.positions.logs/20261006_005348.txt
 """
 import argparse
 import csv
@@ -38,23 +38,30 @@ SHIP_MAP = {
     "Geri": "Venture",
     "Deacon": "Prospect",
     "Thalia": "Prospect",
+    "Malediction": "Prospect",
     # command destroyers
     "Magus": "Endurance",
     "Pontifex": "Endurance",
     # cruisers
     "Augoror Navy Issue": "Procurer",
+    "Omen": "Procurer",
+    "Maller": "Procurer",
+    "Vexor": "Retriever",
+    "Rodiva": "Covetor",
     "Stratios": "Retriever",
     "Ashimmu": "Covetor",
     "Deimos": "Skiff",
     "Oneiros": "Mackinaw",
     # battlecruisers / command ships
     "Harbinger Navy Issue": "Porpoise",
+    "Prophecy Navy Issue": "Porpoise",
     "Absolution": "Porpoise",
     "Astarte": "Porpoise",
     "Eos": "Porpoise",
     # battleships
     "Armageddon": "Orca",
     "Armageddon Navy Issue": "Orca",
+    "Arageddon N": "Orca",  # overview OCR's truncated misread of the above
 }
 
 TICKERS = ["ALPHA", "BRAVO", "CHARL", "DELTA", "ECHO", "FOXTR"]
